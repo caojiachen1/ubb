@@ -11,6 +11,7 @@
 // The daemon is spawned automatically (detached) if it is not running.
 
 import { spawn, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -62,6 +63,17 @@ if (cmd === 'config') {
     cfg.token = v;
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
     console.log(`saved token to ${CONFIG_PATH}`);
+  } else if (k === 'token' && !v) {
+    // generate when absent — fresh machines pair without copying anything
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    const cfg = readConfig();
+    if (typeof cfg.token === 'string' && cfg.token.length >= 32) {
+      console.log(`token already set (${cfg.token.slice(0, 8)}…)`);
+    } else {
+      cfg.token = crypto.randomBytes(32).toString('hex');
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+      console.log(`generated new token (${cfg.token.slice(0, 8)}…) and saved to ${CONFIG_PATH}`);
+    }
   } else if (k === 'port' && v) {
     fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
     const cfg = readConfig();
@@ -75,13 +87,30 @@ if (cmd === 'config') {
 }
 
 // `ubb install`: register the repo bin dir into the per-user PATH (HKCU\Environment,
-// no admin) — same per-user, no-elevation philosophy as the Trae/Qoder installers.
+// no admin) — same per-user, no-elevation philosophy as the Trae/Qoder installers —
+// plus the native messaging host so the extension auto-pairs without token copying.
 if (cmd === 'install') {
   const binDir = path.join(HERE, '..', 'bin');
   const script = `$p=[Environment]::GetEnvironmentVariable('Path','User'); $d='${binDir.replace(/'/g, "''")}'; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d), 'User'); Write-Output ('added to user PATH: ' + $d) } else { Write-Output ('already on user PATH: ' + $d) }`;
   const r = spawnSync('powershell', ['-NoProfile', '-Command', script], { stdio: 'inherit' });
   if (r.status !== 0) process.exit(r.status ?? 1);
-  console.log('next: run `ubb config token <token>` (token from the extension popup); new terminals can run `ubb` directly');
+  const exePath = path.join(binDir, 'ubb.exe');
+  const manifestDir = path.join(os.homedir(), '.ubb');
+  const manifestPath = path.join(manifestDir, 'com.ubb.bridge.json');
+  fs.mkdirSync(manifestDir, { recursive: true });
+  const ORIGIN = 'chrome-extension://elhkfoiapjdaglefijfgapbffflphgim/';
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    name: 'com.ubb.bridge',
+    description: 'UBB native bridge (token auto-pairing)',
+    path: exePath,
+    type: 'stdio',
+    allowed_origins: [ORIGIN],
+  }, null, 2));
+  for (const hive of ['Edge', 'Google\\Chrome']) {
+    spawnSync('reg', ['add', `HKCU\\Software\\Microsoft\\${hive}\\NativeMessagingHosts\\com.ubb.bridge`, '/ve', '/d', manifestPath, '/f'], { stdio: 'ignore' });
+  }
+  console.log(`native pairing host registered: ${manifestPath}`);
+  console.log('next: reload the UBB extension - it pairs automatically (no token copying)');
   process.exit(0);
 }
 

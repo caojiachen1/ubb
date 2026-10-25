@@ -47,6 +47,44 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(() => link.start());
 chrome.alarms.create('ubb-keepalive', { periodInMinutes: 0.5 });
 
+// ── native auto-pairing (channel-bound trust, Trae/Qoder style) ────────────
+// `ubb install` registers a native messaging host whose manifest pins THIS
+// extension's id — the browser refuses any other origin, so nothing on the
+// machine can impersonate us. At every service-worker start we ask the host
+// for the current token/port (it also ensures the daemon runs). The host is
+// the source of truth; when the host isn't installed the manual token flow
+// from the popup keeps working unchanged.
+let nativePairAttempted = false;
+async function nativePair() {
+  if (nativePairAttempted) return;
+  nativePairAttempted = true;
+  const port = chrome.runtime.connectNative('com.ubb.bridge');
+  try {
+    const reply = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('pair timeout')), 5000);
+      port.onMessage.addListener((m) => { clearTimeout(timer); resolve(m); });
+      port.onDisconnect.addListener(() => { clearTimeout(timer); reject(new Error(chrome.runtime.lastError?.message || 'host gone')); });
+      port.postMessage({ op: 'pair' });
+    });
+    if (reply?.ok && typeof reply.token === 'string' && reply.token.length >= 32) {
+      const st = await chrome.storage.local.get([STORAGE_KEYS.token, STORAGE_KEYS.port]);
+      if (st[STORAGE_KEYS.token] !== reply.token || st[STORAGE_KEYS.port] !== (reply.port || 8765)) {
+        await chrome.storage.local.set({
+          [STORAGE_KEYS.token]: reply.token,
+          [STORAGE_KEYS.port]: reply.port || 8765,
+        });
+        audit.log({ action: 'native.pair', note: 'token/port synced from native host' });
+        link.restart(); // reconnect with the paired credentials
+      }
+    }
+  } catch (e) {
+    audit.log({ action: 'native.pair', note: String(e?.message || e).slice(0, 80) });
+  } finally {
+    try { port.disconnect(); } catch {}
+  }
+}
+nativePair();
+
 link.start();
 sessions.restore(); // survive SW restarts
 

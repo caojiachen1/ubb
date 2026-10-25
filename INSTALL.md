@@ -17,16 +17,16 @@ The launchers `bin/ubb` (sh) and `bin/ubb.cmd` (cmd) run the Rust binary directl
 3. Click **Load unpacked** and select this project folder (the one containing `manifest.json`).
 4. Pin "UBB — Universal Browser Bridge" from the extensions menu if you want the toolbar icon.
 
-## 2. Put `ubb` on PATH and pair
+## 2. Put `ubb` on PATH, pair automatically
 
 ```bash
-bin/ubb install                # registers D:\Codebase\ubb\bin into the per-user PATH
-                               # (HKCU\Environment, no admin; idempotent; open a new terminal)
-ubb config token <paste-token-here>   # token from the extension popup
-ubb status                     # auto-starts the daemon; expect "extension": true
+bin/ubb install      # PATH + native pairing host registration (idempotent)
+ubb status           # auto-starts the daemon; expect "extension": true
 ```
 
-That's the whole setup. `install` follows the same philosophy as the Trae/Qoder installers: per-user registration, no elevation, no system files. To undo it, remove the `D:\Codebase\ubb\bin` entry from your user PATH environment variable.
+That's the whole setup — **no token copying**. `install` registers a native messaging host (`com.ubb.bridge`) pinned to this extension's id in the per-user registry (Edge + Chrome hives, no admin). At every extension startup the browser launches that host, the host answers with the config token (generating one on a fresh machine) and ensures the daemon is running — the extension auto-pairs, and if the token ever rotates it self-heals on the next service-worker start.
+
+Manual override still works: `ubb config token <token>` (or `ubb config token` with no argument generates one) — the extension syncs from it on its next start. To uninstall, remove `D:\Codebase\ubb\bin` from your user PATH and delete the `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.ubb.bridge` registry key.
 
 ## 3. Verify
 

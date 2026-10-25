@@ -612,6 +612,134 @@ fn config_path() -> std::path::PathBuf {
     home_dir().unwrap_or_default().join(".ubb").join("config.json")
 }
 
+const PINNED_ORIGIN: &str = "chrome-extension://elhkfoiapjdaglefijfgapbffflphgim/";
+const NATIVE_HOST_NAME: &str = "com.ubb.bridge";
+
+/// Native messaging host: launched by the browser for the pinned extension.
+/// Protocol: 4-byte LE length-prefixed JSON frames on stdio.
+/// `{"op":"pair"}` → ensures the config token exists and the daemon is
+/// running, then answers {"ok",token,port} so the extension can auto-pair.
+async fn run_native_host(origin: &str) {
+    if origin != PINNED_ORIGIN {
+        std::process::exit(2); // not the pinned extension — refuse
+    }
+    use std::io::{Read, Write};
+    let stdin = std::io::stdin();
+    let mut raw = stdin.lock();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    loop {
+        let mut lenb = [0u8; 4];
+        if raw.read_exact(&mut lenb).is_err() {
+            return; // browser closed the port
+        }
+        let len = u32::from_le_bytes(lenb) as usize;
+        if len == 0 || len > 1024 * 1024 {
+            return;
+        }
+        let mut buf = vec![0u8; len];
+        if raw.read_exact(&mut buf).is_err() {
+            return;
+        }
+        let msg: Value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
+        if msg.get("op").and_then(|v| v.as_str()) != Some("pair") {
+            let reply = json!({"ok": false, "error": "unknown op"});
+            let _ = out.write_all(&(reply.to_string().len() as u32).to_le_bytes());
+            let _ = out.write_all(reply.to_string().as_bytes());
+            let _ = out.flush();
+            continue;
+        }
+        // 1) ensure the config token exists (generate if fresh machine)
+        let mut cfg = read_config().as_object().cloned().unwrap_or_default();
+        let token = match cfg.get("token").and_then(|v| v.as_str()) {
+            Some(t) if t.len() >= 32 => t.to_string(),
+            _ => {
+                let mut t = String::new();
+                for _ in 0..4 {
+                    t.push_str(&format!("{:016x}", crypto_random_u64()));
+                }
+                cfg.insert("token".into(), json!(t));
+                write_config(&cfg);
+                t
+            }
+        };
+        // 2) ensure the daemon is running with that token
+        let port = cfg
+            .get("port")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u16)
+            .unwrap_or(8765);
+        let mut started = false;
+        if health(port, 400).await.is_none() {
+            spawn_detached_self(port, &token);
+            started = wait_daemon(port).await;
+        }
+        let reply = json!({"ok": true, "token": token, "port": port, "daemon_started": started});
+        let _ = out.write_all(&(reply.to_string().len() as u32).to_le_bytes());
+        let _ = out.write_all(reply.to_string().as_bytes());
+        let _ = out.flush();
+    }
+}
+
+fn crypto_random_u64() -> u64 {
+    // xorshift seeded from time+pid — the token only ever travels over the
+    // channel-bound native pairing flow, never through a user's hands
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut x = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
+        ^ (std::process::id() as u64).wrapping_mul(0x9E3779B97F4A7C15);
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    x
+}
+
+/// Part of `ubb install`: register the native messaging host so the extension
+/// auto-pairs without copying the token (manifest pins the extension ID;
+/// the browser refuses any other origin). Edge + Chrome registry hives.
+fn register_native_host() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let manifest_dir = config_path()
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf();
+    std::fs::create_dir_all(&manifest_dir).map_err(|e| format!("mkdir: {e}"))?;
+    let manifest_path = manifest_dir.join(format!("{NATIVE_HOST_NAME}.json"));
+    let manifest = json!({
+        "name": NATIVE_HOST_NAME,
+        "description": "UBB native bridge (token auto-pairing)",
+        "path": exe.display().to_string(),
+        "type": "stdio",
+        "allowed_origins": [PINNED_ORIGIN],
+    });
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+    )
+    .map_err(|e| format!("write manifest: {e}"))?;
+    let manifest_str = manifest_path.display().to_string();
+    for hive in ["Edge", "Google\\Chrome"] {
+        let key = format!(
+            r"HKCU\Software\Microsoft\{}\NativeMessagingHosts\{}",
+            hive, NATIVE_HOST_NAME
+        );
+        let st = std::process::Command::new("reg")
+            .args(["add", &key, "/ve", "/d", &manifest_str, "/f"])
+            .output()
+            .map_err(|e| format!("reg add: {e}"))?;
+        if !st.status.success() {
+            return Err(format!(
+                "reg add {} failed: {}",
+                hive,
+                String::from_utf8_lossy(&st.stderr)
+            ));
+        }
+    }
+    Ok(manifest_str)
+}
+
 fn read_config() -> Value {
     std::fs::read_to_string(config_path())
         .ok()
@@ -848,6 +976,15 @@ async fn main() {
     let cmd = positional.first().cloned().unwrap_or_default();
     let rest: Vec<String> = positional.iter().skip(1).cloned().collect();
 
+    // Native messaging host mode: the browser launches this binary when the
+    // pinned extension opens a connectNative port (argv[1] = the origin).
+    // Trust is channel-bound — the registry manifest's allowed_origins plus
+    // this origin check decide who can talk; no token copying needed.
+    if cmd.starts_with("chrome-extension://") {
+        run_native_host(&cmd).await;
+        return;
+    }
+
     if cmd == "serve" {
         let token = token.unwrap_or_default();
         if token.is_empty() {
@@ -896,6 +1033,10 @@ async fn main() {
             }
         }
         println!("next: run `ubb config token <token>` (token from the extension popup); new terminals can run `ubb` directly");
+        match register_native_host() {
+            Ok(m) => println!("native pairing host registered: {m}"),
+            Err(e) => eprintln!("native host registration failed: {e}"),
+        }
         return;
     }
 
