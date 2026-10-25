@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { color-scheme: light; }
+    body { width: 320px; margin: 0; font: 13px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: #111827; }
+    header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px; }
+    .logo { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg,#6366f1,#8b5cf6); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; }
+    h1 { font-size: 14px; margin: 0; flex: 1; }
+    .status { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+    .on  { background: #dcfce7; color: #166534; }
+    .off { background: #fee2e2; color: #991b1b; }
+    .mid { background: #fef9c3; color: #854d0e; }
+    section { padding: 4px 14px 10px; border-bottom: 1px solid #f3f4f6; }
+    .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+    .row label { flex: 1; color: #374151; }
+    input[type=text], input[type=number] { width: 120px; border: 1px solid #d1d5db; border-radius: 6px; padding: 4px 6px; font-size: 12px; }
+    select { border: 1px solid #d1d5db; border-radius: 6px; padding: 4px; font-size: 12px; }
+    .token { display: flex; gap: 6px; align-items: center; }
+    .token code { flex: 1; background: #f3f4f6; border-radius: 6px; padding: 5px 8px; font-size: 11px; word-break: break-all; max-height: 40px; overflow: hidden; }
+    button { all: unset; cursor: pointer; border: 1px solid #d1d5db; border-radius: 6px; padding: 4px 10px; font-size: 12px; background: #fff; }
+    button:hover { background: #f9fafb; }
+    button.primary { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+    .hint { font-size: 11px; color: #6b7280; margin-top: 6px; }
+    .audit { font-size: 11px; color: #6b7280; margin-top: 4px; max-height: 90px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">U</div>
+    <h1>UBB · Universal Browser Bridge</h1>
+    <span id="status" class="status off">未连接</span>
+  </header>
+
+  <section>
+    <div class="row">
+      <label>启用桥接</label>
+      <input type="checkbox" id="enabled" />
+    </div>
+    <div class="row">
+      <label>daemon 端口</label>
+      <input type="number" id="port" min="1" max="65535" />
+      <button id="save">保存</button>
+    </div>
+    <div class="row">
+      <label>拟人操作模式（实验性）</label>
+      <input type="checkbox" id="humanMode" />
+    </div>
+    <div class="row">
+      <label>受控页防护罩</label>
+      <select id="shieldMode">
+        <option value="block">边框 + 拦截点击（默认）</option>
+        <option value="border">仅高亮边框</option>
+        <option value="off">关闭</option>
+      </select>
+    </div>
+  </section>
+
+  <section>
+    <div class="row"><label>配对令牌（daemon 需同一 token）</label></div>
+    <div class="row token">
+      <code id="token">…</code>
+      <button id="copy">复制</button>
+      <button id="regen">重置</button>
+    </div>
+    <div class="row">
+      <input type="text" id="tokenInput" placeholder="粘贴外部令牌后点应用（如 ubb config 预生成的）" style="flex:1" />
+      <button id="applyToken">应用</button>
+    </div>
+    <div class="hint">启动示例：node ubb-bridge.mjs --port 8765 --token &lt;上面的令牌&gt;</div>
+  </section>
+
+  <section>
+    <div class="row"><label id="session">会话：无</label></div>
+    <div class="audit" id="audit"></div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

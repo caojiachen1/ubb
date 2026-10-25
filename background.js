@@ -1,0 +1,175 @@
+// UBB service worker entry: wires agent link ⇄ dispatcher ⇄ tools,
+// content-script messages (interrupt/confirm), alarms keepalive.
+
+import { AgentLink } from './lib/ws-client.js';
+import { Dispatcher } from './lib/protocol.js';
+import { registerTools } from './lib/tools.js';
+import { cdp } from './lib/cdp.js';
+import { refs } from './lib/refs.js';
+import { sessions } from './lib/tabs.js';
+import { audit } from './lib/audit.js';
+import { pendingConfirms, shield } from './lib/shield-ctl.js';
+import { STORAGE_KEYS, DEFAULTS, err, randomHex } from './lib/config.js';
+
+async function loadConfig() {
+  const st = await chrome.storage.local.get([STORAGE_KEYS.token, STORAGE_KEYS.port, STORAGE_KEYS.enabled]);
+  return {
+    token: st[STORAGE_KEYS.token],
+    port: st[STORAGE_KEYS.port] || DEFAULTS.port,
+    enabled: st[STORAGE_KEYS.enabled] !== false && !!st[STORAGE_KEYS.token],
+  };
+}
+
+const link = new AgentLink(loadConfig);
+const dispatcher = new Dispatcher();
+registerTools(dispatcher);
+
+dispatcher.onFinish = (name, params, ok, ms, errorCode) => {
+  audit.log({ action: name, ok, ms, error: errorCode, tab_id: params?.tab_id });
+  if (!ok && sessions.active()) sessions.setStatus('error').then(() => sessions.setStatus('running'));
+};
+
+// inbound from daemon → dispatch → reply
+link.handler = async (msg) => {
+  const reply = await dispatcher.handle(msg);
+  if (reply) link.send(reply);
+};
+
+// ---------------------------------------------------------------- lifecycle
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const st = await chrome.storage.local.get([STORAGE_KEYS.token]);
+  if (!st[STORAGE_KEYS.token]) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.token]: randomHex(32) });
+  }
+});
+
+chrome.runtime.onStartup.addListener(() => link.start());
+chrome.alarms.create('ubb-keepalive', { periodInMinutes: 0.5 });
+
+link.start();
+sessions.restore(); // survive SW restarts
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'ubb-keepalive') {
+    loadConfig().then((c) => {
+      if (c.enabled && link.status === 'off') link.restart();
+    });
+  }
+});
+
+// ---------------------------------------------------------------- debugger events
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  cdp.handleEvent(source, method, params);
+});
+
+cdp.onNavigation = (tabId) => {
+  refs.bump(tabId);
+  link.emit('tab.navigated', { tab_id: tabId });
+};
+
+chrome.debugger.onDetach.addListener(async (source) => {
+  cdp.sessions.delete(source.tabId);
+  refs.invalidate(source.tabId);
+});
+
+// Re-arm the shield after every completed navigation of a session tab:
+// content scripts reset on navigation, and tab.create arms too early (the
+// script is not loaded yet) — onCompleted is the reliable point.
+chrome.webNavigation.onCompleted.addListener(async ({ tabId, frameId }) => {
+  if (frameId !== 0) return;
+  const s = sessions.active();
+  if (s && sessions.owns(tabId)) {
+    await shield.set(tabId, { mode: 'armed', label: 'UBB agent control' });
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  cdp.sessions.delete(tabId);
+  refs.invalidate(tabId);
+  const s = sessions.active();
+  if (s) {
+    s.created.delete(tabId);
+    s.claimed.delete(tabId);
+    if (s.lastTabId === tabId) s.lastTabId = [...s.created][s.created.size - 1] ?? [...s.claimed][0] ?? null;
+  }
+});
+
+// ---------------------------------------------------------------- extension messages
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  (async () => {
+    switch (msg?.type) {
+      // --- from content/shield.js ---
+      case 'UBB_INTERRUPT': {
+        const n = dispatcher.cancelAll();
+        const tabId = sender.tab?.id;
+        if (tabId != null) {
+          // user took over: pause blocking on that tab until the next arm
+          const { shield } = await import('./lib/shield-ctl.js');
+          await shield.set(tabId, { mode: 'paused', label: '已由用户中断' });
+        }
+        link.emit('session.interrupted', { tab_id: tabId, cancelled: n });
+        sendResponse({ ok: true, cancelled: n });
+        break;
+      }
+      case 'UBB_CONFIRM_RESULT': {
+        const p = pendingConfirms.get(msg.reqId);
+        if (p) {
+          pendingConfirms.delete(msg.reqId);
+          p.resolve(!!msg.ok);
+        }
+        sendResponse({ ok: true });
+        break;
+      }
+
+      // --- from popup ---
+      case 'UBB_POPUP_STATE': {
+        const cfg = await loadConfig();
+        sendResponse({
+          connected: link.status === 'connected',
+          status: link.status,
+          instance_id: link.instanceId,
+          session: sessions.active()
+            ? { id: sessions.active().id, created: sessions.active().created.size, claimed: sessions.active().claimed.size }
+            : null,
+          port: cfg.port,
+          enabled: cfg.enabled,
+          has_token: !!cfg.token,
+          token: cfg.token || '(not generated)',
+          shield_mode: (await chrome.storage.local.get(STORAGE_KEYS.shieldMode))[STORAGE_KEYS.shieldMode] || 'block',
+          human_mode: (await chrome.storage.local.get('ubb_human_mode')).ubb_human_mode === true,
+          audit_tail: audit.list(5),
+        });
+        break;
+      }
+      case 'UBB_POPUP_CONFIG': {
+        const patch = {};
+        if (msg.port) patch[STORAGE_KEYS.port] = Number(msg.port) || DEFAULTS.port;
+        if (typeof msg.enabled === 'boolean') patch[STORAGE_KEYS.enabled] = msg.enabled;
+        if (typeof msg.human === 'boolean') patch.ubb_human_mode = msg.human;
+        if (msg.shield_mode) patch[STORAGE_KEYS.shieldMode] = msg.shield_mode;
+        if (typeof msg.token === 'string' && /^[0-9a-f]{16,128}$/i.test(msg.token)) {
+          patch[STORAGE_KEYS.token] = msg.token.toLowerCase();
+        }
+        await chrome.storage.local.set(patch);
+        await link.restart();
+        sendResponse({ ok: true });
+        break;
+      }
+      case 'UBB_POPUP_REGEN_TOKEN': {
+        await chrome.storage.local.set({ [STORAGE_KEYS.token]: randomHex(32) });
+        await link.restart();
+        sendResponse({ ok: true });
+        break;
+      }
+      default:
+        sendResponse({ ok: false, error: 'unknown message' });
+    }
+  })();
+  return true; // async response
+});
+
+// expose for debugging on the SW console
+self.__ubb = { link, dispatcher, cdp, sessions, err };

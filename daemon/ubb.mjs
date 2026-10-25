@@ -1,0 +1,252 @@
+#!/usr/bin/env node
+// ubb — one-shot CLI for AI agents to drive the UBB browser extension.
+//
+//   ubb status                          daemon/extension health (auto-starts daemon)
+//   ubb list                            tool catalog
+//   ubb <tool.name> [json-args]         run a tool, print JSON result
+//   ubb <tool.name> [json] --out FILE   screenshot: write data_base64 to FILE
+//   ubb daemon start|stop|status
+//
+// Config resolution: --token/--port > UBB_TOKEN/UBB_PORT env > ~/.ubb/config.json
+// The daemon is spawned automatically (detached) if it is not running.
+
+import { spawn } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const BRIDGE = path.join(HERE, 'ubb-bridge.mjs');
+const CONFIG_PATH = path.join(os.homedir(), '.ubb', 'config.json');
+
+// ------------------------------------------------------------------ args
+
+const argv = process.argv.slice(2);
+const flag = (name) => {
+  const i = argv.indexOf(`--${name}`);
+  if (i >= 0 && argv[i + 1]) {
+    const v = argv[i + 1];
+    argv.splice(i, 2);
+    return v;
+  }
+  return undefined;
+};
+const TOKEN = flag('token') || process.env.UBB_TOKEN || readConfig().token;
+const PORT = Number(flag('port') || process.env.UBB_PORT || readConfig().port || 8765);
+const OUT = flag('out') || null;
+
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+const [cmd, ...rest] = argv;
+
+function die(msg) {
+  console.error(`ubb: ${msg}`);
+  process.exit(1);
+}
+if (!TOKEN) {
+  die(`no token. Copy it from the UBB extension popup, then either:\n  ubb config token <token>\nor set UBB_TOKEN, or pass --token.`);
+}
+
+// ------------------------------------------------------------------ daemon mgmt
+
+async function health(ms = 800) {
+  try {
+    const c = AbortSignal.timeout(ms);
+    const r = await fetch(`http://127.0.0.1:${PORT}/health`, { signal: c });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+async function startDaemon() {
+  const child = spawn(process.execPath, [BRIDGE, '--port', String(PORT), '--token', TOKEN], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  for (let i = 0; i < 25; i++) {
+    await delay(200);
+    if (await health(400)) return true;
+  }
+  return false;
+}
+
+async function stopDaemon() {
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/shutdown?token=${encodeURIComponent(TOKEN)}`, { method: 'POST' });
+    console.log(JSON.stringify(await r.json()));
+  } catch {
+    die('daemon is not running');
+  }
+}
+
+// ------------------------------------------------------------------ rpc
+
+function rpc(method, params, timeoutMs = 60000) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/`, [`ubb-agent.${TOKEN}`]);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch {}
+      reject(new Error(`timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({ id: 1, method, params }));
+    });
+    ws.addEventListener('message', (ev) => {
+      const m = JSON.parse(ev.data);
+      if (m.id === 1) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { ws.close(); } catch {}
+        resolve(m);
+      }
+    });
+    ws.addEventListener('close', (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(e.code === 1008 ? 'daemon rejected the token (check ubb config token)' : `connection closed (${e.code})`));
+    });
+    ws.addEventListener('error', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error('connect-failed'));
+    });
+  });
+}
+
+async function call(method, params) {
+  let m;
+  try {
+    m = await rpc(method, params);
+  } catch (e) {
+    if (e.message === 'connect-failed') {
+      // auto-start daemon and retry once
+      const up = await startDaemon();
+      if (!up) die(`daemon failed to start on port ${PORT}; run: node "${BRIDGE}" --port ${PORT} --token <token>`);
+      m = await rpc(method, params).catch((e2) => die(`rpc failed: ${e2.message}`));
+    } else {
+      die(`rpc failed: ${e.message}`);
+    }
+  }
+  return m;
+}
+
+function print(m) {
+  if (m.error) {
+    console.error(JSON.stringify(m.error));
+    process.exitCode = 2;
+    return;
+  }
+  let r = m.result;
+  if (OUT && r?.data_base64) {
+    fs.mkdirSync(path.dirname(path.resolve(OUT)), { recursive: true });
+    fs.writeFileSync(OUT, Buffer.from(r.data_base64, 'base64'));
+    const { data_base64, ...meta } = r;
+    console.log(JSON.stringify({ ...meta, saved_to: path.resolve(OUT) }, null, 2));
+    return;
+  }
+  if (r?.data_base64) {
+    const { data_base64, ...meta } = r;
+    console.log(JSON.stringify({ ...meta, note: `screenshot ${Math.round(data_base64.length * 0.75 / 1024)}KB; use --out FILE to save` }, null, 2));
+    return;
+  }
+  if (r?.text && typeof r.text === 'string' && r.text.length > 4000 && !process.env.UBB_RAW) {
+    console.log(r.text); // snapshots/read_page read better as plain text
+    return;
+  }
+  console.log(JSON.stringify(r, null, 2));
+}
+
+// ------------------------------------------------------------------ commands
+
+if (cmd === 'config') {
+  const [k, v] = rest;
+  if (k === 'token' && v) {
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    const cfg = readConfig();
+    cfg.token = v;
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    console.log(`saved token to ${CONFIG_PATH}`);
+  } else if (k === 'port' && v) {
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    const cfg = readConfig();
+    cfg.port = Number(v);
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    console.log(`saved port to ${CONFIG_PATH}`);
+  } else {
+    die('usage: ubb config token <token> | ubb config port <n>');
+  }
+} else if (cmd === 'status') {
+  let h = await health(800);
+  if (!h) {
+    await startDaemon();
+    h = await health();
+  }
+  console.log(JSON.stringify({ port: PORT, daemon: !!h, ...(h || {}) }, null, 2));
+  if (h && !h.extension) {
+    console.error('# daemon OK, extension not connected — load the UBB extension and paste this token in its popup:');
+    console.error(`#   ${TOKEN}`);
+  }
+} else if (cmd === 'daemon') {
+  const sub = rest[0];
+  if (sub === 'stop') await stopDaemon();
+  else if (sub === 'start') {
+    const h = await health(500);
+    if (h) console.log(JSON.stringify({ already_running: true, ...h }));
+    else {
+      const up = await startDaemon();
+      console.log(up ? JSON.stringify({ started: true, ...(await health()) }) : die('failed to start'));
+    }
+  } else {
+    let h = await health(800);
+    if (!h && (sub === 'status' || !sub)) {
+      await startDaemon();
+      h = await health();
+    }
+    console.log(JSON.stringify({ port: PORT, daemon: !!h, ...(h || {}) }));
+  }
+} else if (!cmd || cmd === 'help') {
+  console.log(`ubb — Universal Browser Bridge CLI
+
+  ubb status                       daemon + extension health (auto-start)
+  ubb list                         tool catalog
+  ubb session.start | session.stop end the agent session (✅ group)
+  ubb tab.create '{"url":"example.com"}'
+  ubb snapshot                      take @eN snapshot of the active tab
+  ubb click '{"ref":"@e3"}'
+  ubb fill '{"ref":"@e7","value":"hi"}'
+  ubb screenshot --out shot.png     viewport shot (full_page:true for full page)
+  ubb daemon start|stop|status
+  ubb config token <tok> | port <n>
+
+Tools are called as: ubb <tool.name> '<json-args>'`);
+} else if (cmd === 'list') {
+  print(await call('tool.list'));
+} else {
+  let params = {};
+  if (rest.length) {
+    try {
+      params = JSON.parse(rest.join(' '));
+    } catch {
+      die(`params must be valid JSON, e.g. ubb click '{"ref":"@e3"}'`);
+    }
+  }
+  print(await call(`tool.${cmd}`, params));
+}

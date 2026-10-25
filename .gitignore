@@ -1,0 +1,23 @@
+# Runtime artifacts
+*.log
+*.pid
+daemon.log
+
+# Keys & packaged output
+*.pem
+*.crx
+.ubb-key.pem
+
+# Node
+node_modules/
+package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test / scratch
+_*/
+screenshots/
+ubb-screenshots/
