@@ -1,0 +1,8 @@
+#!/bin/sh
+# UBB launcher: Node CLI by default, Rust binary when Node is absent.
+DIR="$(cd "$(dirname "$0")" && pwd)"
+if command -v node >/dev/null 2>&1; then
+  exec node "$DIR/../daemon/ubb.mjs" "$@"
+else
+  exec "$DIR/ubb.exe" "$@"
+fi

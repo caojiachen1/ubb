@@ -21,3 +21,6 @@ desktop.ini
 _*/
 screenshots/
 ubb-screenshots/
+
+# Rust build artifacts (bin/ubb.exe is the committed, redistributable build)
+rust-cli/target/

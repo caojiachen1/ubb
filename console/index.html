@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>UBB Web Console</title>
+<style>
+  body { font: 14px/1.6 ui-sans-serif, system-ui, sans-serif; max-width: 860px; margin: 40px auto; padding: 0 16px; }
+  pre { background: #f5f6f8; padding: 12px; border-radius: 8px; min-height: 60px; white-space: pre-wrap; word-break: break-all; }
+  input, button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; }
+  button { cursor: pointer; margin-right: 8px; }
+  #err { color: #b00; white-space: pre-wrap; }
+  .row { margin: 10px 0; }
+  code { background: #f0f0f2; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h2>UBB Web Console</h2>
+<p>纯静态页面直连 UBB 扩展（externally_connectable localhost 通道），无需 daemon / CLI / Node。</p>
+
+<div id="err"></div>
+
+<div class="row">
+  令牌（来自扩展弹窗 / ~/.ubb/config.json）：
+  <input id="token" size="70" placeholder="粘贴 64 位令牌，保存在本页 localStorage">
+  <button onclick="saveToken()">保存</button>
+</div>
+
+<div class="row">
+  <button onclick="run('session.status')">session.status</button>
+  <button onclick="run('tool.list')">tool.list</button>
+  <button onclick="run('session.start')">session.start</button>
+  <button onclick="run('session.stop')">session.stop</button>
+  <input id="url" size="40" placeholder="https://example.com">
+  <button onclick="openTab()">tab.create</button>
+</div>
+
+<pre id="out">（点击上方按钮调用工具）</pre>
+
+<p>调用方式：<code>call(tool, params)</code> → <code>chrome.runtime.sendMessage(扩展ID, {type:'UBB_WEB_RPC', token, tool, params})</code></p>
+
+<script>
+const EXT_ID = 'elhkfoiapjdaglefijfgapbffflphgim'; // UBB 安装 ID（换机器后以扩展实际 ID 为准）
+const $ = (id) => document.getElementById(id);
+
+// externally_connectable 只对 http://localhost|127.0.0.1 生效：
+// 用 file:// 双击打开、或经 in-app 浏览器自定义协议打开时，页面拿不到 chrome.runtime。
+if (location.protocol !== 'http:' || !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
+  $('err').textContent =
+    '⚠️ chrome.runtime 不可用：本页当前来源是 ' + location.origin + '\n' +
+    'externally_connectable 只接受 http://localhost/* 与 http://127.0.0.1/*。\n' +
+    '请改用本地 HTTP 服务打开，例如：\n' +
+    '  npx serve ' + '（或） python -m http.server 8089 --directory ' + '本目录\n' +
+    '然后再访问 http://127.0.0.1:8089/console/index.html';
+} else {
+  $('token').value = localStorage.getItem('ubb_web_token') || '';
+}
+
+function saveToken() {
+  localStorage.setItem('ubb_web_token', $('token').value.trim());
+  $('out').textContent = '令牌已保存到 localStorage（仅本机本浏览器可见）';
+}
+
+function call(tool, params = {}, method) {
+  const token = localStorage.getItem('ubb_web_token') || $('token').value.trim();
+  return chrome.runtime.sendMessage(EXT_ID, { type: 'UBB_WEB_RPC', token, tool, params, method })
+    .catch(e => ({ ok: false, error: String(e && e.message || e) }));
+}
+
+async function run(tool, params) {
+  $('out').textContent = '… ' + tool;
+  const r = await call(tool, params);
+  $('out').textContent = JSON.stringify(r, null, 2);
+}
+
+async function openTab() {
+  const url = $('url').value.trim();
+  if (!url) return;
+  const r = await call('session.start');
+  if (!r.ok) { $('out').textContent = JSON.stringify(r, null, 2); return; }
+  run('tab.create', { url });
+}
+</script>
+</body>
+</html>

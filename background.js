@@ -98,6 +98,33 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // ---------------------------------------------------------------- extension messages
 
+// Web-page channel: manifest externally_connectable admits http://localhost/* and
+// http://127.0.0.1/* pages only, and every message must carry the same token the
+// daemon uses — so a page served from any local port can drive UBB without the CLI.
+chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  (async () => {
+    const origin = sender.origin || sender.url || '';
+    if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      return { ok: false, error: 'origin not allowed: ' + origin };
+    }
+    if (!msg || msg.type !== 'UBB_WEB_RPC') {
+      return { ok: false, error: 'unknown message type' };
+    }
+    const st = await chrome.storage.local.get([STORAGE_KEYS.token, STORAGE_KEYS.enabled]);
+    if (st[STORAGE_KEYS.enabled] === false) return { ok: false, error: 'UBB disabled' };
+    if (!st[STORAGE_KEYS.token] || msg.token !== st[STORAGE_KEYS.token]) {
+      return { ok: false, error: 'UNAUTHORIZED: token mismatch' };
+    }
+    const method = msg.method || (msg.tool ? 'tool.' + msg.tool : null);
+    if (!method) return { ok: false, error: 'method/tool required' };
+    audit.log({ action: 'web.rpc', origin, tool: method.replace(/^tool\./, '') });
+    const reply = await dispatcher.handle({ id: 'web-' + Date.now() + '-' + randomHex(4), method, params: msg.params || {} });
+    if (reply && reply.error) return { ok: false, error: reply.error.message || String(reply.error) };
+    return { ok: true, result: reply && reply.result };
+  })().then((r) => sendResponse(r)).catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
+  return true; // async sendResponse
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     switch (msg?.type) {
