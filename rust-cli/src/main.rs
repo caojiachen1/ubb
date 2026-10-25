@@ -1185,6 +1185,9 @@ async fn http_shutdown(port: u16, token: &str) -> Result<String, ()> {
         // a process-exit teardown can RST after the payload; keep what we got
         let _ = s.read_to_end(&mut buf).await;
         let text = String::from_utf8_lossy(&buf).to_string();
+        if text.starts_with("HTTP/1.1 403") {
+            return None; // shutdown refused — caller must not report "not running"
+        }
         if !text.starts_with("HTTP/1.1 200") {
             return None;
         }

@@ -153,12 +153,14 @@ async function startDaemon() {
 }
 
 async function stopDaemon() {
+  let r;
   try {
-    const r = await fetch(`http://127.0.0.1:${PORT}/shutdown?token=${encodeURIComponent(TOKEN)}`, { method: 'POST' });
-    console.log(JSON.stringify(await r.json()));
+    r = await fetch(`http://127.0.0.1:${PORT}/shutdown?token=${encodeURIComponent(TOKEN)}`, { method: 'POST' });
   } catch {
     die('daemon is not running');
   }
+  if (r.status === 403) die('daemon rejected the token (config.json changed? restart with: ubb daemon stop --token <old> or kill the process)');
+  console.log(JSON.stringify(await r.json()));
 }
 
 // ------------------------------------------------------------------ rpc
