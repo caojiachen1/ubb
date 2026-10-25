@@ -10,7 +10,7 @@
 // Config resolution: --token/--port > UBB_TOKEN/UBB_PORT env > ~/.ubb/config.json
 // The daemon is spawned automatically (detached) if it is not running.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -71,6 +71,17 @@ if (cmd === 'config') {
   } else {
     die('usage: ubb config token <token> | ubb config port <n>');
   }
+  process.exit(0);
+}
+
+// `ubb install`: register the repo bin dir into the per-user PATH (HKCU\Environment,
+// no admin) — same per-user, no-elevation philosophy as the Trae/Qoder installers.
+if (cmd === 'install') {
+  const binDir = path.join(HERE, '..', 'bin');
+  const script = `$p=[Environment]::GetEnvironmentVariable('Path','User'); $d='${binDir.replace(/'/g, "''")}'; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d), 'User'); Write-Output ('added to user PATH: ' + $d) } else { Write-Output ('already on user PATH: ' + $d) }`;
+  const r = spawnSync('powershell', ['-NoProfile', '-Command', script], { stdio: 'inherit' });
+  if (r.status !== 0) process.exit(r.status ?? 1);
+  console.log('next: run `ubb config token <token>` (token from the extension popup); new terminals can run `ubb` directly');
   process.exit(0);
 }
 

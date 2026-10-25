@@ -2,7 +2,7 @@
 name = "ubb"
 version = "1.0.0"
 edition = "2021"
-description = "UBB Rust fallback CLI + daemon (protocol-compatible with daemon/ubb-bridge.mjs)"
+description = "UBB CLI + daemon — the default runtime (protocol-compatible with daemon/ubb-bridge.mjs)"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "process"] }

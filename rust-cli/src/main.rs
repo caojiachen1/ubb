@@ -1,4 +1,4 @@
-// ubb — Rust fallback CLI + daemon for UBB.
+// ubb — the default UBB CLI + daemon (single static binary).
 //
 //   ubb serve --port 8765 --token <token>     daemon mode (protocol-compatible
 //                                             with daemon/ubb-bridge.mjs)
@@ -857,6 +857,48 @@ async fn main() {
         return;
     }
 
+    // `ubb install`: register this binary's directory into the per-user PATH
+    // (HKCU\Environment, no admin) so any new terminal can run `ubb` — the same
+    // per-user, no-elevation philosophy the Trae/Qoder installers use.
+    if cmd == "install" {
+        #[cfg(windows)]
+        {
+            let exe = std::env::current_exe().unwrap_or_else(|e| die(&format!("current_exe: {e}")));
+            let dir = exe.parent().unwrap_or_else(|| die("no parent dir")).display().to_string();
+            let dir = dir.replace('\'', "''");
+            let script = format!(
+                "$p=[Environment]::GetEnvironmentVariable('Path','User'); $d='{dir}'; if (($p -split ';') -notcontains $d) {{ [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d), 'User'); Write-Output ('added to user PATH: ' + $d) }} else {{ Write-Output ('already on user PATH: ' + $d) }}"
+            );
+            let out = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &script])
+                .output()
+                .unwrap_or_else(|e| die(&format!("powershell failed: {e}")));
+            print!("{}", String::from_utf8_lossy(&out.stdout));
+            eprint!("{}", String::from_utf8_lossy(&out.stderr));
+            if !out.status.success() {
+                std::process::exit(1);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let exe = std::env::current_exe().unwrap_or_else(|e| die(&format!("current_exe: {e}")));
+            let home = home_dir().unwrap_or_else(|| die("no home dir"));
+            let bin_dir = home.join(".local").join("bin");
+            std::fs::create_dir_all(&bin_dir).unwrap_or_else(|e| die(&format!("mkdir: {e}")));
+            let target = bin_dir.join("ubb");
+            let _ = std::fs::remove_file(&target);
+            match std::os::unix::fs::symlink(&exe, &target) {
+                Ok(_) => println!("symlinked: {}", target.display()),
+                Err(_) => {
+                    std::fs::copy(&exe, &target).unwrap_or_else(|e| die(&format!("copy: {e}")));
+                    println!("copied: {}", target.display());
+                }
+            }
+        }
+        println!("next: run `ubb config token <token>` (token from the extension popup); new terminals can run `ubb` directly");
+        return;
+    }
+
     // config must run before the token gate: on a fresh machine there IS no
     // token yet, and `ubb config token <tok>` is the documented way to add one
     if cmd == "config" {
@@ -962,7 +1004,7 @@ async fn main() {
             }
         },
         "help" | "" => {
-            println!("ubb (rust fallback) — Universal Browser Bridge CLI
+            println!("ubb — Universal Browser Bridge CLI
 
   ubb status                       daemon + extension health (auto-start)
   ubb list                         tool catalog
@@ -971,7 +1013,8 @@ async fn main() {
   ubb daemon start|stop|status
   ubb config token <tok> | port <n>
 
-Zero-Node fallback: this binary runs the daemon itself (`ubb serve`).");
+Default runtime: this single binary also hosts the daemon itself (`ubb serve`).
+Run `ubb install` once on a new machine to put it on the per-user PATH.");
         }
         "list" => match call(port, &token, "tool.list", &Value::Null).await {
             Ok(m) => std::process::exit(print_result(&m, out_flag.as_deref())),

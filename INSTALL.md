@@ -17,24 +17,16 @@ The launchers `bin/ubb` (sh) and `bin/ubb.cmd` (cmd) run the Rust binary directl
 3. Click **Load unpacked** and select this project folder (the one containing `manifest.json`).
 4. Pin "UBB — Universal Browser Bridge" from the extensions menu if you want the toolbar icon.
 
-## 2. Pair with the daemon
-
-1. Click the UBB toolbar icon. The popup shows a **pairing token** (64 hex chars).
-2. Start the daemon with that token:
+## 2. Put `ubb` on PATH and pair
 
 ```bash
-node daemon/ubb.mjs config token <paste-token-here>   # saved to ~/.ubb/config.json
-node daemon/ubb.mjs status                             # auto-starts the daemon
+bin/ubb install                # registers D:\Codebase\ubb\bin into the per-user PATH
+                               # (HKCU\Environment, no admin; idempotent; open a new terminal)
+ubb config token <paste-token-here>   # token from the extension popup
+ubb status                     # auto-starts the daemon; expect "extension": true
 ```
 
-Equivalent without Node — the Rust binary is both client and daemon:
-
-```bash
-bin/ubb.exe config token <paste-token-here>
-bin/ubb.exe status          # spawns `ubb.exe serve` (its own daemon) if none is running
-```
-
-The popup should now show **connected**.
+That's the whole setup. `install` follows the same philosophy as the Trae/Qoder installers: per-user registration, no elevation, no system files. To undo it, remove the `D:\Codebase\ubb\bin` entry from your user PATH environment variable.
 
 ## 3. Verify
 
