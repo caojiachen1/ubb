@@ -81,7 +81,7 @@ impl AppState {
         let text = obj.to_string();
         match sink {
             Sink::Stdio => {
-                println!("{text}");
+                emit(&text);
             }
             Sink::Ws(id) => {
                 let agents = self.ws_agents.lock().unwrap();
@@ -94,7 +94,7 @@ impl AppState {
 
     fn broadcast(&self, obj: &Value) {
         let text = obj.to_string();
-        println!("{text}");
+        emit(&text);
         let agents = self.ws_agents.lock().unwrap();
         for (_, tx) in agents.iter() {
             let _ = tx.send(Message::Text(text.clone().into()));
@@ -103,6 +103,41 @@ impl AppState {
 }
 
 // ------------------------------------------------------------------ helpers
+
+// console write that matches node's behavior on Windows: when stdout is a real
+// console, go through WriteConsoleW so CJK renders under non-UTF8 codepages
+fn emit(s: &str) {
+    #[cfg(windows)]
+    {
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn GetStdHandle(nstdhandle: u32) -> *mut core::ffi::c_void;
+                fn WriteConsoleW(
+                    consoleoutput: *mut core::ffi::c_void,
+                    buffer: *const u16,
+                    numberofcharstowrite: u32,
+                    numberofcharswritten: *mut u32,
+                    reserved: *mut core::ffi::c_void,
+                ) -> i32;
+            }
+            const STD_OUTPUT_HANDLE: u32 = u32::MAX - 10; // (DWORD)-11
+            unsafe {
+                let h = GetStdHandle(STD_OUTPUT_HANDLE);
+                let mut line = String::with_capacity(s.len() + 1);
+                line.push_str(s);
+                line.push(10u8 as char);
+                let wide: Vec<u16> = line.encode_utf16().collect();
+                let mut written = 0u32;
+                if WriteConsoleW(h, wide.as_ptr(), wide.len() as u32, &mut written, std::ptr::null_mut()) != 0 {
+                    return;
+                }
+            }
+        }
+    }
+    println!("{s}");
+}
 
 fn log(msg: &str) {
     eprintln!("[ubb-bridge-rs] {msg}");
@@ -205,10 +240,12 @@ fn handle_agent_message(state: &Arc<AppState>, sink: &Sink, msg: &Value) {
         int_id.clone(),
         Route { sink: sink.clone(), agent_id: id.unwrap().clone() },
     );
+    let params = match msg.get("params") {
+        Some(v) if !v.is_null() => v.clone(),
+        _ => json!({}),
+    };
     let _ = out.send(Message::Text(
-        json!({"id": int_id, "method": method, "params": msg.get("params").cloned().unwrap_or(Value::Null)})
-            .to_string()
-            .into(),
+        json!({"id": int_id, "method": method, "params": params}).to_string().into(),
     ));
 }
 
@@ -497,7 +534,7 @@ async fn run_daemon(port: u16, token: String) {
         "listening on ws://127.0.0.1:{port}/ (token {}…)",
         &token[..token.len().min(4)]
     ));
-    println!("{}", json!({"method": "event.daemon.ready", "params": {"port": port}}));
+    emit(&json!({"method": "event.daemon.ready", "params": {"port": port}}).to_string());
 
     // half-open watchdog: probe a silent extension and drop it if dead
     {
@@ -726,7 +763,7 @@ fn print_result(m: &Value, out: Option<&str>) -> i32 {
                             .unwrap_or_else(|_| file.to_string());
                         o.insert("saved_to".into(), json!(saved));
                     }
-                    println!("{meta}");
+                    emit(&serde_json::to_string_pretty(&meta).unwrap_or_default());
                     0
                 }
                 Err(_) => {
@@ -747,16 +784,17 @@ fn print_result(m: &Value, out: Option<&str>) -> i32 {
             let kb = b64.len() * 3 / 4 / 1024;
             o.insert("note".into(), json!(format!("screenshot {kb}KB; use --out FILE to save")));
         }
-        println!("{meta}");
+        emit(&serde_json::to_string_pretty(&meta).unwrap_or_default());
         return 0;
     }
     if let Some(text) = r.get("text").and_then(|v| v.as_str()) {
-        if text.len() > 4000 && std::env::var_os("UBB_RAW").is_none() {
-            println!("{text}");
+        // node checks JS .length (UTF-16 units); chars() is the closest Rust analog
+        if text.chars().count() > 4000 && std::env::var_os("UBB_RAW").is_none() {
+            emit(text);
             return 0;
         }
     }
-    println!("{r}");
+    emit(&serde_json::to_string_pretty(&r).unwrap_or_default());
     0
 }
 
@@ -846,7 +884,7 @@ async fn main() {
                     a.insert(k.clone(), v.clone());
                 }
             }
-            println!("{out}");
+            emit(&serde_json::to_string_pretty(&out).unwrap_or_default());
             if daemon && !h.as_ref().and_then(|h| h.get("extension")).and_then(|v| v.as_bool()).unwrap_or(false) {
                 eprintln!("# daemon OK, extension not connected — load the UBB extension and paste this token in its popup:");
                 eprintln!("#   {token}");
@@ -865,7 +903,7 @@ async fn main() {
                             a.insert(k.clone(), v.clone());
                         }
                     }
-                    println!("{o}");
+                    emit(&serde_json::to_string_pretty(&o).unwrap_or_default());
                 } else {
                     spawn_detached_self(port, &token);
                     if !wait_daemon(port).await {
@@ -878,7 +916,7 @@ async fn main() {
                             a.insert(k.clone(), v.clone());
                         }
                     }
-                    println!("{o}");
+                    emit(&serde_json::to_string_pretty(&o).unwrap_or_default());
                 }
             }
             _ => {
@@ -900,7 +938,7 @@ async fn main() {
                         a.insert(k.clone(), v.clone());
                     }
                 }
-                println!("{out}");
+                emit(&serde_json::to_string_pretty(&out).unwrap_or_default());
             }
         },
         "help" | "" => {
