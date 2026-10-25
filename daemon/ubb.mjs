@@ -51,6 +51,29 @@ function die(msg) {
   console.error(`ubb: ${msg}`);
   process.exit(1);
 }
+
+// config must run before the token gate: on a fresh machine there IS no token
+// yet, and `ubb config token <tok>` is the documented way to add one
+if (cmd === 'config') {
+  const [k, v] = rest;
+  if (k === 'token' && v) {
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    const cfg = readConfig();
+    cfg.token = v;
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    console.log(`saved token to ${CONFIG_PATH}`);
+  } else if (k === 'port' && v) {
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    const cfg = readConfig();
+    cfg.port = Number(v);
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    console.log(`saved port to ${CONFIG_PATH}`);
+  } else {
+    die('usage: ubb config token <token> | ubb config port <n>');
+  }
+  process.exit(0);
+}
+
 if (!TOKEN) {
   die(`no token. Copy it from the UBB extension popup, then either:\n  ubb config token <token>\nor set UBB_TOKEN, or pass --token.`);
 }
@@ -176,24 +199,7 @@ function print(m) {
 
 // ------------------------------------------------------------------ commands
 
-if (cmd === 'config') {
-  const [k, v] = rest;
-  if (k === 'token' && v) {
-    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-    const cfg = readConfig();
-    cfg.token = v;
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
-    console.log(`saved token to ${CONFIG_PATH}`);
-  } else if (k === 'port' && v) {
-    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-    const cfg = readConfig();
-    cfg.port = Number(v);
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
-    console.log(`saved port to ${CONFIG_PATH}`);
-  } else {
-    die('usage: ubb config token <token> | ubb config port <n>');
-  }
-} else if (cmd === 'status') {
+if (cmd === 'status') {
   let h = await health(800);
   if (!h) {
     await startDaemon();

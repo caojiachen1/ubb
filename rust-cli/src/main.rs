@@ -841,30 +841,34 @@ async fn main() {
         return;
     }
 
+    // config must run before the token gate: on a fresh machine there IS no
+    // token yet, and `ubb config token <tok>` is the documented way to add one
+    if cmd == "config" {
+        let mut c = cfg.as_object().cloned().unwrap_or_default();
+        match (rest.first().map(String::as_str), rest.get(1)) {
+            (Some("token"), Some(v)) => {
+                c.insert("token".into(), json!(v));
+                write_config(&c);
+                println!("saved token to {}", config_path().display());
+            }
+            (Some("port"), Some(v)) => match v.parse::<u16>() {
+                Ok(p) => {
+                    c.insert("port".into(), json!(p));
+                    write_config(&c);
+                    println!("saved port to {}", config_path().display());
+                }
+                Err(_) => die("port must be a number"),
+            },
+            _ => die("usage: ubb config token <token> | ubb config port <n>"),
+        }
+        return;
+    }
+
     let Some(token) = token else {
         die("no token. Copy it from the UBB extension popup, then either:\n  ubb config token <token>\nor set UBB_TOKEN, or pass --token.");
     };
 
     match cmd.as_str() {
-        "config" => {
-            let mut c = cfg.as_object().cloned().unwrap_or_default();
-            match (rest.first().map(String::as_str), rest.get(1)) {
-                (Some("token"), Some(v)) => {
-                    c.insert("token".into(), json!(v));
-                    write_config(&c);
-                    println!("saved token to {}", config_path().display());
-                }
-                (Some("port"), Some(v)) => match v.parse::<u16>() {
-                    Ok(p) => {
-                        c.insert("port".into(), json!(p));
-                        write_config(&c);
-                        println!("saved port to {}", config_path().display());
-                    }
-                    Err(_) => die("port must be a number"),
-                },
-                _ => die("usage: ubb config token <token> | ubb config port <n>"),
-            }
-        }
         "status" => {
             let mut h = health(port, 800).await;
             if h.is_none() {

@@ -4,11 +4,11 @@ Prerequisites: Chrome or Edge (v116+). Three runtimes are available and they coe
 
 | Runtime | Needs | When to use |
 |---|---|---|
-| **Node CLI** (default) | Node.js ≥ 18 (zero npm deps) | AI agents, daily use — auto-starts the daemon |
-| **Rust CLI** (`bin/ubb.exe`) | nothing — single static binary | machines without Node; ships in this repo, rebuild via `rust-cli/` |
-| **Web console** (`console/index.html`) | any local static file server | browser-only control, zero processes |
+| **Rust CLI** (`bin/ubb.exe`) | nothing — single static binary | **default** — zero deps, instant start; ships in this repo, rebuild via `rust-cli/` |
+| Node CLI | Node.js ≥ 18 (zero npm deps) | development — the extension tooling lives in JS, edits land with a reload |
+| Web console (`console/index.html`) | any local static file server | browser-only control, zero processes |
 
-The launchers `bin/ubb` (sh) and `bin/ubb.cmd` (cmd) pick automatically: **Node CLI when `node` is on PATH, the Rust binary otherwise**. Both accept the exact same commands as `node daemon/ubb.mjs`.
+The launchers `bin/ubb` (sh) and `bin/ubb.cmd` (cmd) run the Rust binary directly. The Node CLI (`node daemon/ubb.mjs`) takes the exact same commands and is interchangeable — use it when hacking on the extension tools.
 
 ## 1. Load the extension
 
