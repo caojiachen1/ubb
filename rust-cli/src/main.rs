@@ -277,7 +277,7 @@ fn handle_extension_message(state: &Arc<AppState>, msg: &Value) {
                         .into(),
                 ));
             }
-            log("extension connected");
+            // connection registration already logged; hello only carries info
             state.broadcast(&json!({"method": "event.extension.connected", "params": {"info": info}}));
         }
         _ => {
