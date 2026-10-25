@@ -16,6 +16,7 @@
     "history",
     "offscreen",
     "management",
+    "nativeMessaging",
     "clipboardRead",
     "clipboardWrite"
   ],

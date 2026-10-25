@@ -58,6 +58,7 @@ let nativePairAttempted = false;
 async function nativePair() {
   if (nativePairAttempted) return;
   nativePairAttempted = true;
+  if (typeof chrome.runtime.connectNative !== 'function') return; // no nativeMessaging permission
   const port = chrome.runtime.connectNative('com.ubb.bridge');
   try {
     const reply = await new Promise((resolve, reject) => {
