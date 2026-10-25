@@ -107,7 +107,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const tabId = sender.tab?.id;
         if (tabId != null) {
           // user took over: pause blocking on that tab until the next arm
-          const { shield } = await import('./lib/shield-ctl.js');
+          // (shield is statically imported at the top of this file; dynamic
+          // import() is not allowed on ServiceWorkerGlobalScope)
           await shield.set(tabId, { mode: 'paused', label: '已由用户中断' });
         }
         link.emit('session.interrupted', { tab_id: tabId, cancelled: n });
