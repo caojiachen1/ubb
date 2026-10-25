@@ -54,10 +54,18 @@ chrome.alarms.create('ubb-keepalive', { periodInMinutes: 0.5 });
 // for the current token/port (it also ensures the daemon runs). The host is
 // the source of truth; when the host isn't installed the manual token flow
 // from the popup keeps working unchanged.
-let nativePairAttempted = false;
+let nativePairInFlight = false;
 async function nativePair() {
-  if (nativePairAttempted) return;
-  nativePairAttempted = true;
+  if (nativePairInFlight) return;
+  nativePairInFlight = true;
+  try {
+    await nativePairInner();
+  } finally {
+    nativePairInFlight = false;
+  }
+}
+
+async function nativePairInner() {
   if (typeof chrome.runtime.connectNative !== 'function') return; // no nativeMessaging permission
   const port = chrome.runtime.connectNative('com.ubb.bridge');
   try {
@@ -94,6 +102,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     loadConfig().then((c) => {
       if (c.enabled && link.status === 'off') link.restart();
     });
+    nativePair(); // self-heal ≤30s after a token rotation — a failing-auth WS
+    // never idles the SW out, so a start-time-only pair would never re-run
   }
 });
 
