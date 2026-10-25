@@ -118,6 +118,10 @@ cdp.onNavigation = (tabId) => {
   link.emit('tab.navigated', { tab_id: tabId });
 };
 
+// mid-command detach reported by the CDP hub (no chrome.debugger event may
+// have fired, e.g. a stale "not attached" reply) — refs are stale either way
+cdp.onDetach = (tabId) => refs.invalidate(tabId);
+
 chrome.debugger.onDetach.addListener(async (source) => {
   cdp.sessions.delete(source.tabId);
   refs.invalidate(source.tabId);

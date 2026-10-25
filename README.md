@@ -74,7 +74,7 @@ Daemon CLI: `node daemon/ubb.mjs status|list|<tool> '<json>'` (auto-starts the d
 
 ## Error codes (common)
 
-`EXTENSION_NOT_CONNECTED` · `NO_SESSION` · `TAB_NOT_OWNED` (claim first) · `REF_UNKNOWN` (re-snapshot) · `SENSITIVE_FIELD` (never auto-filled) · `NEEDS_CONFIRM` (retry with `confirm:true`) · `URL_BLOCKED` (chrome:// etc.) · `DEBUGGER_CONFLICT` (DevTools open) · `TOOL_TIMEOUT`
+`EXTENSION_NOT_CONNECTED` · `NO_SESSION` · `TAB_NOT_OWNED` (claim first) · `REF_UNKNOWN` (re-snapshot) · `SENSITIVE_FIELD` (never auto-filled) · `NEEDS_CONFIRM` (retry with `confirm:true`) · `URL_BLOCKED` (chrome:// etc.) · `DEBUGGER_CONFLICT` (DevTools open) · `TOOL_TIMEOUT` · `CDP_TIMEOUT` (renderer stopped answering a CDP command, 45s cap) · `CDP_DETACHED` (debugger lost mid-command; next command re-attaches)
 
 ## Notes & limits
 
