@@ -650,10 +650,26 @@ fn spawn_detached_self(port: u16, token: &str) {
         Err(_) => return,
     };
     let mut cmd = std::process::Command::new(exe);
-    cmd.args(["serve", "--port", &port.to_string(), "--token", token])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null());
+    cmd.args(["serve", "--port", &port.to_string(), "--token", token]);
+    // daemon logs (crash traces included) go to ~/.ubb/daemon.log, truncated per start
+    let log_path = config_path().with_file_name("daemon.log");
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .ok();
+    match log {
+        Some(f) => {
+            let err = f.try_clone().expect("clone daemon log handle");
+            cmd.stdout(std::process::Stdio::from(f))
+                .stderr(std::process::Stdio::from(err));
+        }
+        None => {
+            cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        }
+    }
+    cmd.stdin(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

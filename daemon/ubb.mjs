@@ -92,9 +92,16 @@ async function health(ms = 800) {
 }
 
 async function startDaemon() {
+  // daemon logs (crash traces included) go to ~/.ubb/daemon.log, truncated per start
+  let stdio = 'ignore';
+  try {
+    const logPath = path.join(path.dirname(CONFIG_PATH), 'daemon.log');
+    const fd = fs.openSync(logPath, 'w');
+    stdio = ['ignore', fd, fd];
+  } catch { /* fall back to ignore */ }
   const child = spawn(process.execPath, [BRIDGE, '--port', String(PORT), '--token', TOKEN], {
     detached: true,
-    stdio: 'ignore',
+    stdio,
     windowsHide: true,
   });
   child.unref();
