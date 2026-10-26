@@ -34,7 +34,7 @@ async function refresh() {
     .join('\n');
 }
 
-$('save').addEventListener('click', async () => {
+async function saveNow() {
   await chrome.runtime.sendMessage({
     type: 'UBB_POPUP_CONFIG',
     port: Number($('port').value),
@@ -43,7 +43,13 @@ $('save').addEventListener('click', async () => {
     human: $('humanMode').checked,
   });
   refresh();
-});
+}
+
+// toggles apply immediately — the 2s state poll would otherwise revert them
+$('enabled').addEventListener('change', saveNow);
+$('humanMode').addEventListener('change', saveNow);
+$('shieldMode').addEventListener('change', saveNow);
+$('save').addEventListener('click', saveNow);
 
 $('reveal').addEventListener('click', () => {
   revealed = !revealed;
