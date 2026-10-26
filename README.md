@@ -49,6 +49,22 @@ ubb session.stop
 
 Any agent that can spawn a process can use it: pipe JSON-RPC lines to the daemon's stdin, or connect as a WebSocket agent (`ubb-agent.<token>` subprotocol).
 
+## MCP (backup interface)
+
+For MCP-capable IDE agents (Qoder, TRAE, Cursor, …) that prefer typed tools over shell, `daemon/mcp.mjs` is a zero-dependency MCP stdio adapter speaking to the same daemon — session state is shared with the CLI, and the CLI + skill stay the primary interface:
+
+```bash
+node daemon/mcp.mjs                       # stdio MCP server (Node >= 22)
+```
+
+IDE MCP settings (Qoder: Chat MCP settings · TRAE: 设置 > MCP — both take a stdio JSON config):
+
+```json
+{ "command": "node", "args": ["D:/Codebase/ubb/daemon/mcp.mjs"] }
+```
+
+It exposes 29 curated `ubb_*` tools (session/tabs, snapshot→click/fill loop, screenshot, extract, console/network, request_help) plus a universal `ubb_call {tool, params}` fallback that reaches the full catalog. Token/port resolve exactly like the CLI (`UBB_TOKEN`/`UBB_PORT` env > `~/.ubb/config.json`), and the daemon is auto-started if missing. Screenshots default to saving under `~/.ubb/shots/` and returning the path (token-friendly); pass `inline:true` to embed the image in the conversation instead.
+
 ## Tools (83)
 
 - **Session / tabs**: session.start/stop/status/name · tab.list/create/close/select/claim/release/mark · request_help (human-in-the-loop with completion conditions) · window.minimize/restore/state · resize_window · history.list
