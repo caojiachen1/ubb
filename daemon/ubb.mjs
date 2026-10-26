@@ -87,7 +87,7 @@ if (cmd === 'config') {
 }
 
 // `ubb install`: register the repo bin dir into the per-user PATH (HKCU\Environment,
-// no admin) — same per-user, no-elevation philosophy as the Trae/Qoder installers —
+// no admin) — per-user, no elevation —
 // plus the native messaging host so the extension auto-pairs without token copying.
 if (cmd === 'install') {
   const binDir = path.join(HERE, '..', 'bin');

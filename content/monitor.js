@@ -1,6 +1,6 @@
 // Foreign-extension iframe monitor: neutralizes chrome-extension:// iframes
 // from OTHER extensions that make chrome.debugger.attach fail on a tab
-// (exact problem + fix observed in TraeWork & QwenWork native-bridge code).
+// (the same foreign-iframe problem breaks debugger attach for any extension).
 // Runs passively; only acts when armed by the background.
 
 (() => {

@@ -4,7 +4,7 @@ A browser extension that lets any AI agent (CLI tools, scripts, coding assistant
 
 ## Key features
 
-- **75 tools**: navigation, interaction (ref / CSS selector / coordinates), accessibility-tree snapshots, screenshots (viewport / element / full page), pull-mode live screencast, console & network capture, whitelisted raw CDP, performance tracing, emulation, batch content fetch, clipboard, history, audit trail.
+- **83 tools**: navigation, interaction (ref / CSS selector / coordinates), accessibility-tree snapshots (paginated, hover-probing), screenshots (viewport / element / full page), structured table/list extraction, site-aware page rules (github / zhihu / juejin / wechat / xiaohongshu / x.com), user-action recording, pull-mode live screencast, console & network capture, whitelisted raw CDP, performance tracing, emulation, batch content fetch, clipboard, history, human-assistance requests, audit trail.
 - **Session = tab group**: agent tabs are auto-grouped under a "⏳ UBB" tab group with status emoji. No separate window. Taking over an existing tab requires an on-page Allow/Deny banner (60s, default deny).
 - **Shield on controlled tabs**: pulsing border + input blocking (clicks, keys, wheel, touch) with a one-click "Stop agent" interrupt. Hidden automatically during screenshots.
 - **Security by default**: token-authenticated loopback WebSocket (extension dials out only — it never listens), password/OTP/payment fields are never auto-filled, destructive actions require explicit `confirm:true`, results are redacted (passwords, tokens, cookies, sensitive URL params), in-memory audit trail.
@@ -47,19 +47,19 @@ node "$UBB" session.stop
 
 Any agent that can spawn a process can use it: pipe JSON-RPC lines to the daemon's stdin, or connect as a WebSocket agent (`ubb-agent.<token>` subprotocol).
 
-## Tools (75)
+## Tools (83)
 
-- **Session / tabs**: session.start/stop/status/name · tab.list/create/close/select/claim/release/mark · window.minimize/restore/state · resize_window · history.list
+- **Session / tabs**: session.start/stop/status/name · tab.list/create/close/select/claim/release/mark · request_help (human-in-the-loop with completion conditions) · window.minimize/restore/state · resize_window · history.list
 - **Navigation**: navigate · go_back · go_forward · reload
 - **Interaction**: click (ref/selector/coords) · hover · fill · fill_form · form.set · type · press_key · scroll · drag · upload_file · download · download.status/path · ax.action · clipboard.read\*/clipboard.write · webmcp.list/invoke\*
-- **Sensing**: snapshot · read_page · get_html · find · evaluate\* · wait_for · element.info · locator.count · element.visible/enabled/text/texts/attribute · tabs.content (batch) · export.gsuite · export.youtube
-- **Capture**: screenshot · screencast.start/next/stop · assets.list/bundle
+- **Sensing**: snapshot (next_cursor pagination · probe_hover for hover menus) · read_page · read_site (site-aware extraction) · extract (table/list → JSON/CSV with coverage) · get_html · find · evaluate\* · wait_for · element.info · locator.count · element.visible/enabled/text/texts/attribute · tabs.content (batch) · export.gsuite · export.youtube
+- **Capture**: screenshot (viewport/element/full_page) · screencast.start/next/stop · record_start/record_status/record_stop (semantic user-action trace; survives navigation) · assets.list/bundle
 - **Diagnostics**: console.list · network.list/get · dialog.status/handle · cdp.call\* · cdp.events · perf.start/stop · bot.report · audit.list · emulate/emulate.reset
 - **Experimental**: human.status / human.set\* (default off)
 
 \* = gated: `confirm:true` required (evaluate & webmcp.invoke in MAIN world, clipboard.read, cdp.call write class, dangerous labels, human.set).
 
-Ref discipline: refs (`@eN`) come from `snapshot` and stay valid across snapshots; navigation invalidates them (`REF_UNKNOWN`) — take a fresh snapshot.
+Ref discipline: refs (`@eN`) come from `snapshot` and stay valid across snapshots and across `next_cursor` pages of the same capture; navigation invalidates them (`REF_UNKNOWN`) — take a fresh snapshot. Large pages return `next_cursor` instead of silently truncating.
 
 ## Configuration
 

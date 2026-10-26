@@ -48,7 +48,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(() => link.start());
 chrome.alarms.create('ubb-keepalive', { periodInMinutes: 0.5 });
 
-// ── native auto-pairing (channel-bound trust, Trae/Qoder style) ────────────
+// ── native auto-pairing (channel-bound trust) ────────────
 // `ubb install` registers a native messaging host whose manifest pins THIS
 // extension's id — the browser refuses any other origin, so nothing on the
 // machine can impersonate us. At every service-worker start we ask the host

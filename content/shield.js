@@ -3,7 +3,7 @@
 // - input-blocking veil (user clicks/keys are swallowed while armed)
 // - status pill with a Stop (interrupt) button
 // - pass-through gate for agent CDP input (UBB_PASS) and screenshot hygiene (UBB_VISIBLE)
-// (visual language: BrowserSkill/Qoder indicators; gating: QwenWork HIDE_FOR_TOOL_USE)
+// (visual language: pulsing indicator; gating: hide-for-tool-use pattern)
 
 (() => {
   if (window.__ubbShield) return;
@@ -153,7 +153,7 @@
   // Keyboard/context-menu blocking at capture phase. CDP-injected key events
   // are indistinguishable from real ones in-page, so the background flips
   // `pass` on before each agent input burst (UBB_PASS) — exactly like the
-  // QwenWork HIDE_FOR_TOOL_USE gate.
+  // hide-for-tool-use gate.
   for (const type of ['keydown', 'keyup', 'keypress']) {
     window.addEventListener(
       type,

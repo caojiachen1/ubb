@@ -1,6 +1,6 @@
 // UBB page bridge: main-content text extraction, React-safe form fill,
 // keyword element search, DOM-fallback tree with @dN refs
-// (role heuristics from Qoder/QwenWork content scripts).
+// (role heuristics tuned on common content and social sites).
 
 (() => {
   if (window.__ubbBridge) return;
@@ -184,7 +184,7 @@
     return true;
   }
 
-  // ---- structured extraction (BrowserSkill extract semantics) -----------------
+  // ---- structured extraction: tables/lists → JSON/CSV with coverage ----------
   // Reads loaded DOM only; completeness is reported via coverage, never assumed.
 
   function cellText(el) {
@@ -297,7 +297,7 @@
     };
   }
 
-  // ---- site-aware extraction (TraeWork extractor rules, de-duplicated) --------
+  // ---- site-aware extraction: hostname-routed page rules ---------------------
   // Hostname-routed structured extraction returning {text, images, videos}.
   // Image positions are referenced inline as {{IMG_N}} markers.
 
@@ -533,7 +533,7 @@
     };
   }
 
-  // ---- user action recording (TraeWork recorder semantics, hardened) ----------
+  // ---- user action recording (semantic trace, hardened) ----------------------
   // Events survive same-tab navigation via sessionStorage; password fields are
   // masked as ***; hard cap 10 minutes; stop via record_stop.
 
