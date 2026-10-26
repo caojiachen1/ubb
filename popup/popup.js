@@ -1,6 +1,16 @@
-// UBB popup: connection status, token, port, shield mode, session info.
+// UBB popup: connection status, token (masked by default), port, shield mode, session info.
 
 const $ = (id) => document.getElementById(id);
+
+let fullToken = '';
+let revealed = false;
+
+function renderToken() {
+  $('token').textContent = fullToken
+    ? (revealed ? fullToken : fullToken.slice(0, 6) + ' … ' + fullToken.slice(-4))
+    : '…';
+  $('reveal').textContent = revealed ? '隐藏' : '显示';
+}
 
 async function refresh() {
   const st = await chrome.runtime.sendMessage({ type: 'UBB_POPUP_STATE' });
@@ -9,7 +19,9 @@ async function refresh() {
   badge.textContent =
     st.connected ? '已连接' : st.status === 'connecting' || st.status === 'waiting_auth' ? '连接中' : '未连接';
   badge.className = 'status ' + (st.connected ? 'on' : st.status === 'off' ? 'off' : 'mid');
-  $('token').textContent = st.token;
+  if (st.token !== fullToken) revealed = false;
+  fullToken = st.token || '';
+  renderToken();
   $('port').value = st.port;
   $('enabled').checked = !!st.enabled;
   $('humanMode').checked = !!st.human_mode;
@@ -33,8 +45,13 @@ $('save').addEventListener('click', async () => {
   refresh();
 });
 
+$('reveal').addEventListener('click', () => {
+  revealed = !revealed;
+  renderToken();
+});
+
 $('copy').addEventListener('click', async () => {
-  await navigator.clipboard.writeText($('token').textContent);
+  await navigator.clipboard.writeText(fullToken);
   $('copy').textContent = '已复制';
   setTimeout(() => ($('copy').textContent = '复制'), 1200);
 });

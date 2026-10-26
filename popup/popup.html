@@ -3,37 +3,160 @@
 <head>
   <meta charset="utf-8" />
   <style>
-    :root { color-scheme: light; }
-    body { width: 320px; margin: 0; font: 13px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: #111827; }
-    header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px; }
-    .logo { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg,#6366f1,#8b5cf6); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; }
-    h1 { font-size: 14px; margin: 0; flex: 1; }
-    .status { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
-    .on  { background: #dcfce7; color: #166534; }
-    .off { background: #fee2e2; color: #991b1b; }
-    .mid { background: #fef9c3; color: #854d0e; }
-    section { padding: 4px 14px 10px; border-bottom: 1px solid #f3f4f6; }
-    .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
-    .row label { flex: 1; color: #374151; }
-    input[type=text], input[type=number] { width: 120px; border: 1px solid #d1d5db; border-radius: 6px; padding: 4px 6px; font-size: 12px; }
-    select { border: 1px solid #d1d5db; border-radius: 6px; padding: 4px; font-size: 12px; }
-    .token { display: flex; gap: 6px; align-items: center; }
-    .token code { flex: 1; background: #f3f4f6; border-radius: 6px; padding: 5px 8px; font-size: 11px; word-break: break-all; max-height: 40px; overflow: hidden; }
-    button { all: unset; cursor: pointer; border: 1px solid #d1d5db; border-radius: 6px; padding: 4px 10px; font-size: 12px; background: #fff; }
-    button:hover { background: #f9fafb; }
-    button.primary { background: #4f46e5; color: #fff; border-color: #4f46e5; }
-    .hint { font-size: 11px; color: #6b7280; margin-top: 6px; }
-    .audit { font-size: 11px; color: #6b7280; margin-top: 4px; max-height: 90px; overflow: auto; }
+    :root {
+      color-scheme: dark;
+      --bg: rgba(32, 31, 38, .92);
+      --card: rgba(255, 255, 255, .045);
+      --card-hover: rgba(255, 255, 255, .08);
+      --stroke: rgba(255, 255, 255, .07);
+      --text: #f3f3f6;
+      --text-2: #a8a8b3;
+      --accent: #8b93f8;
+      --accent-strong: #6d74e8;
+      --danger: #f1707a;
+      --ok: #6ccb5f;
+    }
+    * { box-sizing: border-box; }
+    html { background: transparent; }
+    body {
+      width: 360px; margin: 0; padding: 0;
+      font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(120% 90% at 85% -10%, rgba(139, 147, 248, .14), transparent 55%),
+        radial-gradient(110% 80% at -10% 110%, rgba(109, 116, 232, .10), transparent 50%),
+        var(--bg);
+      backdrop-filter: blur(28px) saturate(1.25);
+      -webkit-backdrop-filter: blur(28px) saturate(1.25);
+    }
+    header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 16px 10px;
+    }
+    .logo {
+      width: 26px; height: 26px; border-radius: 7px; flex: none;
+      background: linear-gradient(135deg, #8b93f8, #b18cf8);
+      color: #fff; display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 12px;
+      box-shadow: 0 2px 8px rgba(109, 116, 232, .45);
+    }
+    h1 { font-size: 13.5px; font-weight: 600; margin: 0; flex: 1; letter-spacing: .2px; }
+    .status {
+      font-size: 11px; padding: 3px 10px; border-radius: 999px; flex: none;
+      border: 1px solid transparent; display: flex; align-items: center; gap: 6px;
+    }
+    .status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .on  { background: rgba(108, 203, 95, .14); color: #8fd884; border-color: rgba(108, 203, 95, .35); }
+    .off { background: rgba(241, 112, 122, .12); color: #f4919a; border-color: rgba(241, 112, 122, .32); }
+    .mid { background: rgba(250, 204, 92, .12); color: #f5d06f; border-color: rgba(250, 204, 92, .3); }
+
+    section.card {
+      margin: 0 10px 8px; padding: 12px 14px;
+      background: var(--card); border: 1px solid var(--stroke); border-radius: 10px;
+    }
+    .row { display: flex; align-items: center; gap: 10px; margin: 9px 0; min-height: 26px; }
+    .row:first-child { margin-top: 0; }
+    .row:last-child { margin-bottom: 0; }
+    .row > label { flex: 1; color: var(--text); }
+
+    /* Fluent toggle switch */
+    input[type="checkbox"] {
+      appearance: none; -webkit-appearance: none;
+      width: 40px; height: 20px; margin: 0; flex: none; cursor: pointer;
+      border-radius: 999px; border: 1px solid rgba(255, 255, 255, .55);
+      background: rgba(255, 255, 255, .06); position: relative; transition: background .15s, border-color .15s;
+    }
+    input[type="checkbox"]::before {
+      content: ""; position: absolute; top: 3px; left: 4px;
+      width: 12px; height: 12px; border-radius: 50%; background: #e8e8ec;
+      transition: left .15s ease, background .15s;
+    }
+    input[type="checkbox"]:hover::before { transform: scale(1.15); }
+    input[type="checkbox"]:checked {
+      background: var(--accent-strong); border-color: var(--accent-strong);
+    }
+    input[type="checkbox"]:checked::before { left: 22px; background: #fff; }
+
+    input[type="text"], input[type="number"] {
+      flex: 1; min-width: 0; border: 1px solid var(--stroke); border-radius: 6px;
+      padding: 5px 9px; font-size: 12.5px; color: var(--text);
+      background: rgba(0, 0, 0, .25); outline: none; transition: border-color .15s;
+    }
+    input[type="number"] { flex: none; width: 92px; }
+    input[type="text"]:focus, input[type="number"]:focus {
+      border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent);
+    }
+    input[type="text"]::placeholder { color: var(--text-2); }
+    select {
+      flex: none; border: 1px solid var(--stroke); border-radius: 6px;
+      padding: 5px 8px; font-size: 12.5px; color: var(--text);
+      background: rgba(0, 0, 0, .25); outline: none; cursor: pointer;
+    }
+    select:focus { border-color: var(--accent); }
+    select option { background: #26252c; color: var(--text); }
+
+    button {
+      all: unset; cursor: pointer; user-select: none;
+      border: 1px solid var(--stroke); border-radius: 6px; padding: 5px 12px;
+      font-size: 12px; font-weight: 500; color: var(--text);
+      background: var(--card-hover); transition: background .12s, border-color .12s;
+      text-align: center; flex: none;
+    }
+    button:hover { background: rgba(255, 255, 255, .12); }
+    button:active { background: rgba(255, 255, 255, .16); }
+    button.primary {
+      background: var(--accent-strong); border-color: transparent; color: #fff;
+    }
+    button.primary:hover { background: var(--accent); }
+    button.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+    .hint { font-size: 11px; color: var(--text-2); margin-top: 8px; line-height: 1.55; }
+    .hint code { color: #c9c9d4; background: rgba(255,255,255,.06); border-radius: 4px; padding: 0 4px; }
+
+    /* advanced / token */
+    details.advanced { margin: 0 10px 8px; }
+    details.advanced summary {
+      list-style: none; cursor: pointer; user-select: none;
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; margin: 0 0 8px;
+      background: var(--card); border: 1px solid var(--stroke); border-radius: 10px;
+      font-size: 12.5px; color: var(--text-2); transition: background .12s;
+    }
+    details.advanced summary:hover { background: var(--card-hover); color: var(--text); }
+    details.advanced summary::-webkit-details-marker { display: none; }
+    details.advanced summary::after {
+      content: ""; margin-left: auto; width: 7px; height: 7px; flex: none;
+      border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+      transform: rotate(45deg); transition: transform .15s; opacity: .7;
+    }
+    details.advanced[open] summary::after { transform: rotate(225deg); }
+    details.advanced .card { margin: 0 0 8px; }
+
+    .token { display: flex; gap: 6px; align-items: stretch; }
+    .token code {
+      flex: 1; background: rgba(0, 0, 0, .28); border: 1px solid var(--stroke);
+      border-radius: 6px; padding: 6px 9px; font-size: 11px; font-family: Consolas, monospace;
+      word-break: break-all; max-height: 44px; overflow: hidden; color: #c9c9d4;
+      display: flex; align-items: center;
+    }
+
+    .audit {
+      font-size: 11px; color: var(--text-2); font-family: Consolas, monospace;
+      margin-top: 6px; max-height: 96px; overflow: auto; white-space: pre;
+      scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent;
+    }
+    .audit::-webkit-scrollbar { width: 6px; }
+    .audit::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
   </style>
 </head>
 <body>
   <header>
     <div class="logo">U</div>
-    <h1>UBB · Universal Browser Bridge</h1>
+    <h1>UBB · 浏览器桥</h1>
     <span id="status" class="status off">未连接</span>
   </header>
 
-  <section>
+  <section class="card">
     <div class="row">
       <label>启用桥接</label>
       <input type="checkbox" id="enabled" />
@@ -41,7 +164,7 @@
     <div class="row">
       <label>daemon 端口</label>
       <input type="number" id="port" min="1" max="65535" />
-      <button id="save">保存</button>
+      <button id="save" class="primary">保存</button>
     </div>
     <div class="row">
       <label>拟人操作模式（实验性）</label>
@@ -57,21 +180,28 @@
     </div>
   </section>
 
-  <section>
-    <div class="row"><label>配对令牌（daemon 需同一 token）</label></div>
-    <div class="row token">
-      <code id="token">…</code>
-      <button id="copy">复制</button>
-      <button id="regen">重置</button>
-    </div>
-    <div class="row">
-      <input type="text" id="tokenInput" placeholder="粘贴外部令牌后点应用（如 ubb config 预生成的）" style="flex:1" />
-      <button id="applyToken">应用</button>
-    </div>
-    <div class="hint">启动示例：node ubb-bridge.mjs --port 8765 --token &lt;上面的令牌&gt;</div>
-  </section>
+  <details class="advanced">
+    <summary>高级 · 配对与令牌</summary>
+    <section class="card">
+      <div class="hint" style="margin:0 0 8px">
+        通常无需手动配置：<code>ubb install</code> 后通过原生消息主机自动配对。
+        手动启动 daemon：<code>ubb status</code> 自动拉起；或
+        <code>node daemon/ubb-bridge.mjs --port 8765 --token &lt;令牌&gt;</code>
+      </div>
+      <div class="row"><label>当前令牌（daemon 需一致）</label><button id="reveal">显示</button></div>
+      <div class="row token">
+        <code id="token">…</code>
+        <button id="copy">复制</button>
+        <button id="regen" class="danger">重置</button>
+      </div>
+      <div class="row">
+        <input type="text" id="tokenInput" placeholder="粘贴外部令牌后点应用（排障用）" />
+        <button id="applyToken">应用</button>
+      </div>
+    </section>
+  </details>
 
-  <section>
+  <section class="card">
     <div class="row"><label id="session">会话：无</label></div>
     <div class="audit" id="audit"></div>
   </section>
