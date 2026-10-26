@@ -614,7 +614,13 @@
     let pendingTimer = null;
     let persistTimer = null;
     function persist() {
+      // sessionStorage keeps the trace across SAME-origin navigations; the
+      // background store covers cross-origin ones (sessionStorage is per-origin)
       try { sessionStorage.setItem(REC_KEY, JSON.stringify(rec)); } catch { /* quota: keep in memory */ }
+      try {
+        const plain = JSON.parse(JSON.stringify(rec, (k, v) => (k.startsWith('_') ? undefined : v)));
+        chrome.runtime.sendMessage({ type: 'UBB_REC_SAVE', rec: plain }).catch(() => {});
+      } catch { /* SW unreachable: sessionStorage path still covers same-origin */ }
     }
     function flushPending() {
       for (const p of pending) rec.events.push(p.event);
@@ -746,9 +752,16 @@
       const o = (() => { try { return JSON.parse(sessionStorage.getItem(REC_KEY) || 'null'); } catch { return null; } })();
       if (o) {
         try { sessionStorage.removeItem(REC_KEY); } catch {}
-        return { id: o.id, description: o.description, started_at: o.startedAt, duration_ms: Date.now() - o._t0, start_url: o.startUrl, final_url: location.href, events: o.events, snapshots: o.snapshots, event_count: o.events.length, snapshot_count: o.snapshots.length, complete: true, recovered: true };
+        return { id: o.id, description: o.description, started_at: o.startedAt, duration_ms: Date.now() - o._t0, start_url: o.startUrl, final_url: location.href, events: o.events, snapshots: o.snapshots, event_count: o.events.length, snapshot_count: o.snapshots.length, complete: true, recovered: 'same-origin' };
       }
-      throw new Error('no recording in progress');
+      // cross-origin navigation: the background store has the last saved trace
+      return chrome.runtime
+        .sendMessage({ type: 'UBB_REC_LOAD' })
+        .then((resp) => {
+          if (!resp || !resp.ok || !resp.rec) throw new Error('no recording in progress');
+          const o = resp.rec;
+          return { id: o.id, description: o.description, started_at: o.startedAt, duration_ms: Date.now() - new Date(o.startedAt).getTime(), start_url: o.startUrl, final_url: location.href, events: o.events, snapshots: o.snapshots, event_count: o.events.length, snapshot_count: o.snapshots.length, complete: true, recovered: 'background' };
+        });
     }
     if (r._stop) r._stop(); else if (r._ac) r._ac.abort();
     clearInterval(r._navPoll);
@@ -762,6 +775,7 @@
       note: 'trace is data, not authorization; replay uses semantic targets in order',
     };
     try { sessionStorage.removeItem(REC_KEY); } catch {}
+    chrome.runtime.sendMessage({ type: 'UBB_REC_SAVE', rec: null }).catch(() => {});
     delete window.__ubbRecording;
     return trace;
   }

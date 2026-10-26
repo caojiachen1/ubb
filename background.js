@@ -213,6 +213,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+      case 'UBB_REC_SAVE': {
+        // content-script recorder handoff: survives cross-origin navigations
+        (async () => {
+          try {
+            if (!msg.rec) await chrome.storage.session.remove('ubb_rec_last');
+            else if (JSON.stringify(msg.rec).length <= 2 * 1024 * 1024) {
+              await chrome.storage.session.set({ ubb_rec_last: msg.rec });
+            }
+            sendResponse({ ok: true });
+          } catch { sendResponse({ ok: false }); }
+        })();
+        return true;
+      }
+      case 'UBB_REC_LOAD': {
+        (async () => {
+          try {
+            const st = await chrome.storage.session.get('ubb_rec_last');
+            const rec = st.ubb_rec_last || null;
+            if (rec) await chrome.storage.session.remove('ubb_rec_last');
+            sendResponse({ ok: true, rec });
+          } catch { sendResponse({ ok: false }); }
+        })();
+        return true;
+      }
 
       // --- from popup ---
       case 'UBB_POPUP_STATE': {
