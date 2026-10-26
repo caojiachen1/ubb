@@ -81,6 +81,7 @@ Daemon CLI: `ubb status|list|<tool> '<json>'` (auto-starts the daemon), `ubb dae
 ## Notes & limits
 
 - Restricted pages (`chrome://`, `edge://`, extension store) are blocked by design.
+- Background tabs automate fully (input, screenshots, extraction, diagnostics) and tabs open silently in the background. Only visibility-dependent work needs the page in front: CSS `:hover` menus, live screencast frames of animated pages, lazy-load-dependent extraction — use `tab.create {"active":true}` or `tab.select`; `request_help` and `record_start` bring the tab to front automatically.
 - Service-worker restarts and daemon kills self-heal (session state survives via `chrome.storage.session`; refs do not survive browser restarts).
 - `export.youtube` may be blocked by YouTube's caption enforcement without a logged-in profile; `export.gsuite` requires the user's Google login.
 - HTML5 drag & drop lands more reliably with human mode enabled.
