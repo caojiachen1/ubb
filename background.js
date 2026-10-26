@@ -6,7 +6,7 @@ import { Dispatcher } from './lib/protocol.js';
 import { registerTools } from './lib/tools.js';
 import { cdp } from './lib/cdp.js';
 import { refs } from './lib/refs.js';
-import { dropSnapshotCapture } from './lib/snapshot.js';
+import { dropCapture } from './lib/snapshot.js';
 import { sessions } from './lib/tabs.js';
 import { audit } from './lib/audit.js';
 import { pendingConfirms, shield } from './lib/shield-ctl.js';
@@ -123,7 +123,7 @@ cdp.onNavigation = (tabId) => {
 // have fired, e.g. a stale "not attached" reply) — refs are stale either way
 cdp.onDetach = (tabId) => {
   refs.invalidate(tabId);
-  dropSnapshotCapture(tabId);
+  dropCapture(tabId);
 };
 
 chrome.debugger.onDetach.addListener(async (source) => {
