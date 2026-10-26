@@ -6,6 +6,7 @@ import { Dispatcher } from './lib/protocol.js';
 import { registerTools } from './lib/tools.js';
 import { cdp } from './lib/cdp.js';
 import { refs } from './lib/refs.js';
+import { dropSnapshotCapture } from './lib/snapshot.js';
 import { sessions } from './lib/tabs.js';
 import { audit } from './lib/audit.js';
 import { pendingConfirms, shield } from './lib/shield-ctl.js';
@@ -120,7 +121,10 @@ cdp.onNavigation = (tabId) => {
 
 // mid-command detach reported by the CDP hub (no chrome.debugger event may
 // have fired, e.g. a stale "not attached" reply) — refs are stale either way
-cdp.onDetach = (tabId) => refs.invalidate(tabId);
+cdp.onDetach = (tabId) => {
+  refs.invalidate(tabId);
+  dropSnapshotCapture(tabId);
+};
 
 chrome.debugger.onDetach.addListener(async (source) => {
   cdp.sessions.delete(source.tabId);
@@ -201,6 +205,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           pendingConfirms.delete(msg.reqId);
           p.resolve(!!msg.ok);
         }
+        sendResponse({ ok: true });
+        break;
+      }
+      case 'UBB_HELP_RESULT': {
+        shield.helpResult(msg.reqId, msg.ok);
         sendResponse({ ok: true });
         break;
       }

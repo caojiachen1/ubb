@@ -13,6 +13,7 @@
   let blockMode = 'block'; // block | border | off (from popup setting)
   let pass = false; // agent input in flight → veil lets events through
   let visible = true;
+  let helpActive = false; // human-assistance banner up → page belongs to the user
   let label = 'UBB agent control';
   let host = null;
   let veil = null;
@@ -60,6 +61,19 @@
     .card .allow { background: #4f46e5; color: #fff; }
     .card .deny { background: #e5e7eb; color: #374151; }
     .count { color: #6b7280; font-size: 12px; margin-left: 10px; }
+    .helpcard {
+      position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+      background: #fff; color: #111827; border-radius: 14px;
+      padding: 14px 18px; max-width: 480px; pointer-events: auto;
+      box-shadow: 0 18px 48px rgba(0,0,0,.3); font-size: 13.5px;
+      border: 1px solid rgba(99,102,241,.5);
+    }
+    .helpcard .t { font-weight: 600; margin-bottom: 4px; font-size: 14px; }
+    .helpcard .s { color: #6b7280; font-size: 12px; margin-bottom: 10px; }
+    .helpcard .btns { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+    .helpcard button { all: unset; cursor: pointer; border-radius: 8px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; }
+    .helpcard .done { background: #4f46e5; color: #fff; }
+    .helpcard .cancel { background: #e5e7eb; color: #374151; }
   `;
 
   function build() {
@@ -120,7 +134,7 @@
     if (veil) {
       // pointer-events toggling is invisible; the tint NEVER changes with
       // pass state, so the shield does not flicker during agent operations
-      const blocking = mode === 'armed' && blockMode === 'block' && !pass;
+      const blocking = mode === 'armed' && blockMode === 'block' && !pass && !helpActive;
       veil.style.pointerEvents = blocking ? 'auto' : 'none';
       veil.style.background = 'rgba(99,102,241,.05)';
     }
@@ -131,7 +145,9 @@
   }
 
   function blockingKeys() {
-    return mode === 'armed' && blockMode === 'block' && !pass && visible;
+    // during human assistance the page belongs to the user: typing, scrolling
+    // and clicking must all reach the page (login forms, captchas, payment)
+    return !helpActive && mode === 'armed' && blockMode === 'block' && !pass && visible;
   }
 
   // Keyboard/context-menu blocking at capture phase. CDP-injected key events
@@ -226,6 +242,65 @@
     });
   }
 
+  // ---- human assistance banner (non-blocking; page belongs to the user) -----
+
+  let currentHelp = null; // { reqId, card, tick }
+
+  function closeHelp() {
+    if (!currentHelp) return;
+    clearInterval(currentHelp.tick);
+    currentHelp.card.remove();
+    currentHelp = null;
+    if (helpActive) {
+      helpActive = false;
+      apply();
+    }
+  }
+
+  function showHelp({ reqId, title, timeoutMs }) {
+    if (!host) build();
+    closeHelp(); // supersede any earlier banner
+    const root = host.shadowRoot;
+    const card = document.createElement('div');
+    card.className = 'helpcard';
+    const t = document.createElement('div');
+    t.className = 't';
+    t.textContent = title || 'UBB 请求人工协助';
+    const s = document.createElement('div');
+    s.className = 's';
+    s.textContent = '请在页面上完成操作；本横幅不拦截你的输入。完成后点"完成"，或等代理自动判定。';
+    const btns = document.createElement('div');
+    btns.className = 'btns';
+    const count = document.createElement('span');
+    count.className = 's';
+    const cancel = document.createElement('button');
+    cancel.className = 'cancel';
+    cancel.textContent = '取消';
+    const done = document.createElement('button');
+    done.className = 'done';
+    done.textContent = '✓ 完成了';
+    btns.append(count, cancel, done);
+    card.append(t, s, btns);
+    root.querySelector('.host').appendChild(card);
+
+    helpActive = true;
+    apply();
+    currentHelp = { reqId, card, tick: null };
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      const left = Math.max(0, Math.ceil((timeoutMs - (Date.now() - t0)) / 1000));
+      count.textContent = `${left}s`;
+      if (left <= 0) finish(false);
+    }, 500);
+    currentHelp.tick = tick;
+    function finish(ok) {
+      try { chrome.runtime.sendMessage({ type: 'UBB_HELP_RESULT', reqId, ok }); } catch {}
+      closeHelp();
+    }
+    done.addEventListener('click', () => finish(true));
+    cancel.addEventListener('click', () => finish(false));
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'UBB_SHIELD') {
@@ -247,6 +322,12 @@
       sendResponse({ ok: true });
     } else if (msg.type === 'UBB_CONFIRM') {
       showConfirm(msg);
+      sendResponse({ ok: true });
+    } else if (msg.type === 'UBB_HELP') {
+      showHelp(msg);
+      sendResponse({ ok: true });
+    } else if (msg.type === 'UBB_HELP_CLOSE') {
+      if (currentHelp && (!msg.reqId || currentHelp.reqId === msg.reqId)) closeHelp();
       sendResponse({ ok: true });
     }
   });

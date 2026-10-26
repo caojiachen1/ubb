@@ -184,7 +184,121 @@
     return true;
   }
 
-  const api = { getPageText, fillDom, search, clickDom, getDomTree, visible, roleOf };
+  // ---- structured extraction (BrowserSkill extract semantics) -----------------
+  // Reads loaded DOM only; completeness is reported via coverage, never assumed.
+
+  function cellText(el) {
+    return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : null;
+  }
+
+  function extractData({
+    selector, item_selector, fields,
+    max_rows = 500, max_columns = 100, max_bytes = 1048576,
+  } = {}) {
+    const warnings = [];
+
+    // ---- list mode: repeated cards with per-item field selectors
+    if (item_selector) {
+      if (!Array.isArray(fields) || !fields.length) {
+        throw new Error('list mode needs fields: [{key, selector, read: text|href|attribute}]');
+      }
+      const roots = [...document.querySelectorAll(item_selector)].filter(visible);
+      const items = [];
+      let bytes = 0;
+      let truncated = false;
+      for (const rootEl of roots) {
+        if (items.length >= max_rows) { truncated = true; warnings.push('row cap reached; remaining items skipped'); break; }
+        const rec = {};
+        for (const f of fields) {
+          let v = null;
+          const target = f.selector && f.selector !== ':scope' ? rootEl.querySelector(f.selector) : rootEl;
+          if (!target) { rec[f.key] = null; continue; }
+          if (f.read === 'href') v = target.href || target.getAttribute('href') || null;
+          else if (f.read === 'attribute') v = f.attribute ? target.getAttribute(f.attribute) : null;
+          else v = cellText(target);
+          rec[f.key] = v;
+        }
+        bytes += JSON.stringify(rec).length;
+        if (bytes > max_bytes) { truncated = true; warnings.push('byte budget reached mid-row; last row may be partial'); }
+        items.push(rec);
+        if (bytes > max_bytes) break;
+      }
+      return {
+        mode: 'list',
+        fields: fields.map((f) => f.key),
+        items,
+        coverage: { items: items.length, total_found: roots.length, truncated },
+        warnings,
+        url: location.href,
+        title: document.title,
+      };
+    }
+
+    // ---- table mode: <table> elements (selector optional)
+    let tables;
+    if (selector) {
+      tables = [...document.querySelectorAll(selector)]
+        .map((el) => (el.tagName === 'TABLE' ? el : el.querySelector('table')))
+        .filter(Boolean);
+    } else {
+      tables = [...document.querySelectorAll('table')].filter(visible);
+    }
+    const out = [];
+    let truncated = false;
+    let bytes = 0;
+    for (const t of tables) {
+      if (out.length >= 20) { warnings.push('more than 20 tables matched; extras skipped'); break; }
+      const headRow = t.tHead && t.tHead.rows[0];
+      let headerCells = headRow ? [...headRow.cells] : null;
+      let bodyRows = [...t.tBodies].flatMap((tb) => [...tb.rows]);
+      if (!headerCells && bodyRows.length) {
+        const first = [...bodyRows[0].cells];
+        if (first.length && first.every((c) => c.tagName === 'TH')) {
+          headerCells = first;
+          bodyRows = bodyRows.slice(1);
+        }
+      }
+      let headers = headerCells
+        ? headerCells.slice(0, max_columns).map((c, i) => cellText(c) || `col${i}`)
+        : null;
+      if (headerCells && headerCells.length > max_columns) warnings.push('column cap: extra columns dropped');
+      const rows = [];
+      for (const tr of bodyRows) {
+        if (rows.length >= max_rows) { truncated = true; warnings.push('row cap reached; remaining rows skipped'); break; }
+        const cells = [...tr.cells].slice(0, max_columns);
+        const row = headers
+          ? headers.map((_, i) => cellText(cells[i]))
+          : cells.map(cellText);
+        if (!headers) row.columns_used = undefined; // positional rows stay arrays
+        rows.push(row);
+        bytes += JSON.stringify(row).length;
+        if (bytes > max_bytes) { truncated = true; warnings.push('byte budget reached mid-table'); break; }
+      }
+      if (!headers) headers = null;
+      out.push({
+        headers,
+        rows,
+        coverage: {
+          rows: rows.length,
+          total_body_rows: bodyRows.length,
+          columns: headers ? headers.length : (bodyRows[0] ? [...bodyRows[0].cells].length : 0),
+          truncated: rows.length < bodyRows.length,
+        },
+      });
+      if (bytes > max_bytes) break;
+    }
+    if (!out.length && !tables.length && selector) warnings.push(`no <table> under selector: ${selector}`);
+    return {
+      mode: 'table',
+      tables: out,
+      coverage: { tables: out.length, truncated },
+      warnings,
+      url: location.href,
+      title: document.title,
+    };
+  }
+
+  const api = { getPageText, fillDom, search, clickDom, getDomTree, extractData, visible, roleOf };
   window.__ubbBridge = api;
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
