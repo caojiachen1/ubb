@@ -194,12 +194,13 @@ const TOOLS = [
   },
   {
     name: 'ubb_tab_create',
-    description: 'Create a tab inside the UBB group (auto-starts a session if needed). Opens SILENTLY in the background; pass active:true only for pages that must be visible (CSS hover menus, video).',
+    description: 'Create a tab inside the UBB group (auto-starts a session if needed). Opens SILENTLY in the background and WAITS for the page to finish loading before returning (loaded flag; cap with timeout_ms, default 20s) — safe to snapshot right after. Pass active:true only for pages that must be visible (CSS hover menus, video).',
     inputSchema: {
       type: 'object',
       properties: {
         url: s('string', 'URL; scheme optional ("example.com" is fine).'),
         active: s('boolean', 'Bring the new tab to front.'),
+        timeout_ms: s('number', 'Load-wait cap (default 20000).'),
       },
       required: ['url'],
       additionalProperties: true,
