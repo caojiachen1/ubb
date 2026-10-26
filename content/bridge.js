@@ -788,7 +788,13 @@
     try {
       const fn = api[msg.op];
       if (typeof fn !== 'function') throw new Error(`unknown op ${msg.op}`);
-      sendResponse({ ok: true, result: fn(msg.args || {}) });
+      // ops may return promises (record_stop recovers a trace from the
+      // background store) — keep the message channel open for them
+      Promise.resolve(fn(msg.args || {})).then(
+        (result) => sendResponse({ ok: true, result }),
+        (e) => sendResponse({ ok: false, error: String(e?.message || e) }),
+      );
+      return true;
     } catch (e) {
       sendResponse({ ok: false, error: String(e?.message || e) });
     }
