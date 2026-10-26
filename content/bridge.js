@@ -6,6 +6,8 @@
   if (window.__ubbBridge) return;
   const domRefs = new Map(); // "@dN" → WeakRef element
   let nextDom = 1;
+  // same rule as the @eN fill path in lib/tools.js — kept textually in sync
+  const SENSITIVE_FIELD = /(password|passwd|密码|otp|one[-\s]?time|验证码|cvv|cvc|card.?number|卡号|secret|私钥)/i;
 
   const CONTENT_SELECTORS = [
     'article', 'main', '[role="main"]', '[class*="article-body"]', '#content', '.content',
@@ -132,6 +134,14 @@
       ? domRefs.get(ref)?.deref()
       : document.querySelector(selector);
     if (!el) throw new Error(ref ? 'stale DOM ref: ' + ref : 'selector not found: ' + selector);
+    // same rule as the @eN fill path: password / OTP / payment fields are
+    // never auto-filled, no matter how the target was addressed
+    if (el instanceof HTMLInputElement) {
+      const hay = [el.autocomplete, el.name, el.id, el.placeholder, el.getAttribute('aria-label')].join(' ');
+      if (el.type === 'password' || SENSITIVE_FIELD.test(hay)) {
+        throw new Error('SENSITIVE_FIELD: this looks like a password / OTP / payment field — UBB never auto-fills it; ask the user to type it');
+      }
+    }
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       nativeSet(el, value);
     } else if (el.isContentEditable) {
