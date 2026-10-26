@@ -269,7 +269,6 @@
         const row = headers
           ? headers.map((_, i) => cellText(cells[i]))
           : cells.map(cellText);
-        if (!headers) row.columns_used = undefined; // positional rows stay arrays
         rows.push(row);
         bytes += JSON.stringify(row).length;
         if (bytes > max_bytes) { truncated = true; warnings.push('byte budget reached mid-table'); break; }
