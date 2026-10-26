@@ -297,7 +297,476 @@
     };
   }
 
-  const api = { getPageText, fillDom, search, clickDom, getDomTree, extractData, visible, roleOf };
+  // ---- site-aware extraction (TraeWork extractor rules, de-duplicated) --------
+  // Hostname-routed structured extraction returning {text, images, videos}.
+  // Image positions are referenced inline as {{IMG_N}} markers.
+
+  function genericExtract() {
+    const clone = document.body.cloneNode(true);
+    for (const sel of ['script', 'style', 'noscript', 'iframe', 'svg', 'nav', 'footer', 'header']) {
+      clone.querySelectorAll(sel).forEach((el) => el.remove());
+    }
+    const text = (clone.innerText || clone.textContent || '')
+      .replace(/\n{3,}/g, '\n\n').replace(/[ \t]+/g, ' ').trim();
+    const images = [];
+    const main = document.querySelector('article, main, .content, .post-content, .entry-content') || document.body;
+    for (const img of main.querySelectorAll('img')) {
+      const src = img.src || img.getAttribute('data-src');
+      if (!src || src.startsWith('data:image/svg')) continue;
+      const w = img.naturalWidth || img.width || 0;
+      const h = img.naturalHeight || img.height || 0;
+      if (w > 0 && w < 100 && h > 0 && h < 100) continue;
+      images.push({ src, alt: img.alt || '' });
+    }
+    return { text, images };
+  }
+
+  function imgRef(images, img, src) {
+    images.push({ src, alt: img.alt || '' });
+    return '![' + (img.alt || '') + ']({{IMG_' + (images.length - 1) + '}})';
+  }
+
+  function githubExtract() {
+    const parts = [], images = [];
+    const repo = document.querySelector('[itemprop="name"] a, .AppHeader-context-item-label');
+    if (repo) parts.push('# ' + repo.textContent.trim());
+    const desc = document.querySelector('.f4.my-3, [class*="About"] p, .repository-content .f4');
+    if (desc) parts.push(desc.textContent.trim());
+    const topics = document.querySelectorAll('.topic-tag, a[data-octo-click="topic_click"]');
+    if (topics.length) parts.push('Topics: ' + [...topics].map((t) => t.textContent.trim()).join(', '));
+    const readme = document.querySelector('#readme article, .markdown-body');
+    if (readme) {
+      parts.push('\n---\n', readme.textContent.trim());
+      for (const img of readme.querySelectorAll('img')) {
+        if (img.src && !/badge|shields\.io|avatar/.test(img.src)) parts.push(imgRef(images, img, img.src));
+      }
+    }
+    const issueTitle = document.querySelector('.js-issue-title, .gh-header-title');
+    if (issueTitle) {
+      parts.length = 0; images.length = 0;
+      parts.push('# ' + issueTitle.textContent.trim());
+      const body = document.querySelector('.comment-body .markdown-body');
+      if (body) {
+        parts.push(body.textContent.trim());
+        for (const img of body.querySelectorAll('img')) {
+          if (img.src && !img.src.includes('avatar')) parts.push(imgRef(images, img, img.src));
+        }
+      }
+      document.querySelectorAll('.timeline-comment .comment-body').forEach((c, i) => {
+        if (i > 10) return;
+        parts.push('---\n' + c.textContent.trim());
+      });
+    }
+    return parts.length ? { text: parts.join('\n\n'), images, referer: 'https://github.com' } : null;
+  }
+
+  function zhihuExtract() {
+    const parts = [], images = [];
+    const q = document.querySelector('.QuestionHeader-title, h1.QuestionPage-title');
+    if (q) parts.push('# ' + q.textContent.trim());
+    const qd = document.querySelector('.QuestionHeader-detail .RichText');
+    if (qd) parts.push(qd.textContent.trim());
+    const richSel = 'img[data-original], img[data-actualsrc], figure img';
+    document.querySelectorAll('.RichContent-inner, .Post-RichText, .RichText.ztext').forEach((answer, i) => {
+      if (i > 5) return;
+      const text = answer.textContent.trim();
+      if (text.length <= 50) return;
+      const item = answer.closest('.AnswerItem, .ContentItem');
+      const author = item ? item.querySelector('.AuthorInfo-name, .UserLink-link') : null;
+      if (author) parts.push('## ' + author.textContent.trim() + ' 的回答');
+      parts.push(text);
+      for (const img of answer.querySelectorAll(richSel)) {
+        const src = img.getAttribute('data-original') || img.getAttribute('data-actualsrc') || img.src;
+        if (src && !/equation|avatar/.test(src)) parts.push(imgRef(images, img, src));
+      }
+    });
+    if (parts.length <= 1) {
+      const at = document.querySelector('.Post-Title');
+      const ac = document.querySelector('.Post-RichTextContainer, .RichText.ztext.Post-RichText');
+      if (at) parts.push('# ' + at.textContent.trim());
+      if (ac) {
+        parts.push(ac.textContent.trim());
+        for (const img of ac.querySelectorAll(richSel)) {
+          const src = img.getAttribute('data-original') || img.getAttribute('data-actualsrc') || img.src;
+          if (src && !/equation|avatar/.test(src)) parts.push(imgRef(images, img, src));
+        }
+      }
+    }
+    return parts.length ? { text: parts.join('\n\n'), images, referer: 'https://www.zhihu.com' } : null;
+  }
+
+  function juejinExtract() {
+    const parts = [], images = [];
+    const title = document.querySelector('.article-title, h1');
+    if (title) parts.push('# ' + title.textContent.trim());
+    const author = document.querySelector('.author-name, .username');
+    if (author) parts.push('Author: ' + author.textContent.trim());
+    const content = document.querySelector('.article-content, .markdown-body');
+    if (content) {
+      parts.push(content.textContent.trim());
+      for (const img of content.querySelectorAll('img')) {
+        const src = img.src || img.getAttribute('data-src');
+        if (src && !/avatar|user-gold-cdn/.test(src)) parts.push(imgRef(images, img, src));
+      }
+    }
+    const tags = document.querySelectorAll('.tag-list .tag, a[href*="/tag/"]');
+    if (tags.length) parts.push('Tags: ' + [...tags].map((t) => t.textContent.trim()).filter(Boolean).join(', '));
+    return parts.length ? { text: parts.join('\n\n'), images, referer: 'https://juejin.cn' } : null;
+  }
+
+  function wechatExtract() {
+    const parts = [], images = [];
+    const title = document.querySelector('#activity-name, .rich_media_title');
+    if (title) parts.push('# ' + title.textContent.trim());
+    const author = document.querySelector('#js_name, .rich_media_meta_nickname');
+    if (author) parts.push('Author: ' + author.textContent.trim());
+    const content = document.querySelector('#js_content, .rich_media_content');
+    if (content) {
+      parts.push(content.textContent.trim());
+      for (const img of content.querySelectorAll('img[data-src]')) {
+        parts.push(imgRef(images, img, img.getAttribute('data-src')));
+      }
+    }
+    return parts.length ? { text: parts.join('\n\n'), images, referer: 'https://mp.weixin.qq.com' } : null;
+  }
+
+  function xiaohongshuExtract() {
+    const parts = [], images = [], videos = [];
+    const titleEl = document.querySelector('#detail-title, .note-content .title, [class*="note-title"], [class*="noteTitle"]')
+      || document.querySelector('h1, [class*="title"]');
+    if (titleEl) parts.push('# ' + titleEl.textContent.trim());
+    let noteImages = document.querySelectorAll('.note-image-list img, [class*="slide"] img[src*="xhscdn"], [class*="swiper-slide"] img, [class*="carousel"] img[src], .media-container img');
+    if (!noteImages.length) noteImages = document.querySelectorAll('img[src*="xhscdn"], img[src*="xiaohongshu"]');
+    const seen = new Set();
+    for (const img of noteImages) {
+      const src = img.src || img.getAttribute('data-src') || img.currentSrc;
+      if (!src || src.startsWith('data:') || seen.has(src)) continue;
+      const w = img.naturalWidth || img.width || parseInt(img.getAttribute('width')) || 999;
+      if (w < 50) continue;
+      seen.add(src);
+      parts.push(imgRef(images, img, src));
+    }
+    const contentSel = ['#detail-desc', '.note-content .desc', '[class*="note-text"]', '[class*="noteText"]', '[class*="content"] [class*="desc"]', '.note-detail .content', '[id*="detail"] [class*="desc"]'];
+    let contentEl = null;
+    for (const sel of contentSel) {
+      const el = document.querySelector(sel);
+      if (el && el.textContent.trim().length > 10) { contentEl = el; break; }
+    }
+    if (!contentEl) {
+      let longest = '';
+      for (const el of document.querySelectorAll('[class*="note"] p, [class*="note"] span, [class*="detail"] p, [class*="detail"] span')) {
+        const t = el.textContent.trim();
+        if (t.length > longest.length && t.length > 20) { longest = t; contentEl = el; }
+      }
+    }
+    if (contentEl) parts.push(contentEl.textContent.trim());
+    const tagEls = document.querySelectorAll('[class*="tag"] a, a[href*="/search_result/"], a[href*="/explore/"] [class*="tag"]');
+    const tags = [...new Set([...tagEls].map((t) => t.textContent.trim()).filter((t) => t && t.startsWith('#')))];
+    if (tags.length) parts.push('\nTags: ' + tags.join(' '));
+    for (const v of document.querySelectorAll('video')) {
+      let src = v.src || v.currentSrc;
+      if (!src) { const s = v.querySelector('source'); if (s) src = s.src; }
+      if (src && !src.startsWith('blob:')) videos.push({ src, poster: v.poster || undefined, type: 'video', referer: 'https://www.xiaohongshu.com' });
+      else if (v.poster) videos.push({ src: location.href, poster: v.poster, type: 'video-blob', referer: 'https://www.xiaohongshu.com', note: 'video is blob: access via the original page' });
+    }
+    if (videos.length) parts.push('\n[Video: ' + videos.length + ' clip(s) captured]');
+    return parts.length ? { text: parts.join('\n\n'), images, videos, referer: 'https://www.xiaohongshu.com' } : null;
+  }
+
+  function twitterExtract() {
+    const parts = [], images = [], videos = [];
+    const articles = document.querySelectorAll('article[data-testid="tweet"]');
+    const first = articles[0];
+    if (first) {
+      const author = first.querySelector('[data-testid="User-Name"]');
+      if (author) parts.push('@' + author.textContent.trim());
+      const tweet = first.querySelector('[data-testid="tweetText"]');
+      if (tweet) parts.push(tweet.textContent.trim());
+      for (const img of first.querySelectorAll('[data-testid="tweetPhoto"] img')) {
+        if (img.src && !/emoji|profile_images/.test(img.src)) parts.push(imgRef(images, img, img.src));
+      }
+      for (const v of first.querySelectorAll('video')) {
+        let src = v.src || v.currentSrc;
+        if (!src) { const s = v.querySelector('source'); if (s) src = s.src; }
+        if (src && !src.startsWith('blob:')) videos.push({ src, poster: v.poster || undefined, type: 'video', referer: 'https://x.com' });
+        else if (v.poster) videos.push({ src: location.href, poster: v.poster, type: 'video-blob', referer: 'https://x.com', note: 'video is blob: access via the original page' });
+      }
+      const time = first.querySelector('time');
+      if (time) parts.push('Time: ' + time.getAttribute('datetime'));
+      const metrics = first.querySelectorAll('[data-testid$="count"]');
+      if (metrics.length) parts.push('Engagement: ' + [...metrics].map((m) => m.textContent.trim()).filter(Boolean).join(' | '));
+    }
+    if (!parts.length) {
+      [...articles].slice(0, 20).forEach((tw) => {
+        const text = tw.querySelector('[data-testid="tweetText"]');
+        const author = tw.querySelector('[data-testid="User-Name"]');
+        if (!text) return;
+        parts.push((author ? '@' + author.textContent.split('·')[0].trim() + ': ' : '') + text.textContent.trim());
+        for (const img of tw.querySelectorAll('[data-testid="tweetPhoto"] img')) {
+          if (img.src && !/emoji|profile_images/.test(img.src)) parts.push(imgRef(images, img, img.src));
+        }
+      });
+      parts.sort(() => 0); // keep timeline order
+    }
+    return parts.length ? { text: parts.join('\n\n---\n\n'), images, videos, referer: 'https://x.com' } : null;
+  }
+
+  function extractSite({ max_chars = 50000 } = {}) {
+    const host = location.hostname;
+    const routes = [
+      ['github.com', githubExtract], ['zhihu.com', zhihuExtract], ['juejin.cn', juejinExtract],
+      ['mp.weixin.qq.com', wechatExtract], ['xiaohongshu.com', xiaohongshuExtract],
+      ['x.com', twitterExtract], ['twitter.com', twitterExtract],
+    ];
+    const hit = routes.find(([h]) => host.includes(h));
+    let r = null;
+    let site = hit ? hit[0] : 'generic';
+    try { r = hit ? hit[1]() : null; } catch { r = null; }
+    if (!r || !String(r.text || '').trim()) { r = genericExtract(); site = 'generic'; }
+    return {
+      site,
+      text: String(r.text || '').slice(0, max_chars),
+      images: r.images || [],
+      videos: r.videos || [],
+      url: location.href,
+      title: document.title,
+    };
+  }
+
+  // ---- user action recording (TraeWork recorder semantics, hardened) ----------
+  // Events survive same-tab navigation via sessionStorage; password fields are
+  // masked as ***; hard cap 10 minutes; stop via record_stop.
+
+  const REC_KEY = '__ubb_rec';
+  const REC_MAX_MS = 600000;
+  const REC_MAX_BYTES = 2 * 1024 * 1024;
+
+  function recordTarget(el) {
+    const cls = el.className && typeof el.className === 'string' ? '.' + el.className.split(/\s+/).filter(Boolean).join('.') : '';
+    return {
+      selector: el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + cls,
+      text: (el.textContent || '').trim().slice(0, 50),
+      role: el.getAttribute('role') || el.tagName.toLowerCase(),
+      label: el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '',
+    };
+  }
+
+  function recHash(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  }
+
+  function recordStart({ description } = {}) {
+    let rec = null;
+    const orphan = (() => { try { return JSON.parse(sessionStorage.getItem(REC_KEY) || 'null'); } catch { return null; } })();
+    if (orphan && orphan.active) {
+      // same-tab navigation: adopt the previous page's recording and continue
+      rec = orphan;
+      rec.events.push({ type: 'navigation', timestamp: Date.now() - rec._t0, url: location.href, note: 'page changed; recording continued' });
+    } else {
+      try { sessionStorage.removeItem(REC_KEY); } catch {}
+      rec = {
+        id: 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+        description: String(description || ''),
+        startedAt: new Date().toISOString(),
+        _t0: Date.now(),
+        startUrl: location.href,
+        events: [{ type: 'start', timestamp: 0, url: location.href }],
+        snapshots: [],
+        active: true,
+      };
+    }
+    window.__ubbRecording = rec;
+    const ts = () => Date.now() - rec._t0;
+
+    let snapHash = '';
+    function captureSnapshot() {
+      if (rec.snapshots.length >= 50) return null;
+      let content = '# ' + document.title + '\n# url: ' + location.href + '\n';
+      try {
+        const walk = (el, d) => {
+          if (d > 4 || !el) return '';
+          let out = '';
+          const tag = el.tagName ? el.tagName.toLowerCase() : '';
+          const role = el.getAttribute ? el.getAttribute('role') || '' : '';
+          let text = '';
+          if (el.childNodes.length === 1 && el.childNodes[0].nodeType === 3) text = el.childNodes[0].textContent.trim().slice(0, 60);
+          const label = el.getAttribute ? el.getAttribute('aria-label') || el.getAttribute('placeholder') || '' : '';
+          if (tag && (role || text || ['button', 'a', 'input', 'select', 'h1', 'h2', 'h3'].includes(tag))) {
+            out += '  '.repeat(d) + tag + (role ? '[' + role + ']' : '') + (text ? ' "' + text + '"' : '') + (label ? ' label=' + label : '') + '\n';
+          }
+          for (let i = 0; i < el.children.length && i < 50; i++) out += walk(el.children[i], d + 1);
+          return out;
+        };
+        content += walk(document.body, 0);
+      } catch { /* keep the title/url header */ }
+      if (content.length > 102400) content = content.slice(0, 102400);
+      const h = recHash(content);
+      if (h === snapHash) return null;
+      snapHash = h;
+      const snapId = 'snap_' + ts();
+      rec.snapshots.push({ snapshotId: snapId, timestamp: ts(), url: location.href, content });
+      return snapId;
+    }
+
+    const pending = [];
+    let pendingTimer = null;
+    let persistTimer = null;
+    function persist() {
+      try { sessionStorage.setItem(REC_KEY, JSON.stringify(rec)); } catch { /* quota: keep in memory */ }
+    }
+    function flushPending() {
+      for (const p of pending) rec.events.push(p.event);
+      pending.length = 0;
+      if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+      persist();
+    }
+    function bufferEvent(el, ev) {
+      const i = pending.findIndex((p) => p.el === el);
+      if (i >= 0) pending[i].event = ev; else pending.push({ el, event: ev });
+      if (pendingTimer) clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(flushPending, 500);
+    }
+    function recordEvent(ev) {
+      flushPending();
+      rec.events.push(ev);
+      if (!persistTimer) persistTimer = setTimeout(persist, 300);
+    }
+    const ac = new AbortController();
+    rec._ac = ac;
+    const on = (type, fn, opts) => document.addEventListener(type, fn, { capture: true, signal: ac.signal, ...opts });
+
+    let pointerDrag = null, htmlDrag = null, suppressedClick = null;
+    const finishDrag = (drag, endX, endY, dropEl) => {
+      if (!drag) return;
+      const dx = endX - drag.startX, dy = endY - drag.startY;
+      if (dx * dx + dy * dy < 25) return;
+      const dest = dropEl || document.elementFromPoint(endX, endY) || drag.el;
+      const snapId = captureSnapshot();
+      recordEvent({ type: 'drag', timestamp: ts(), snapshotId: snapId, target: drag.target, dropTarget: dest ? recordTarget(dest) : null, from: { x: drag.startX, y: drag.startY }, to: { x: endX, y: endY } });
+      suppressedClick = { x: endX, y: endY, until: Date.now() + 500 };
+    };
+    on('pointerdown', (e) => {
+      if (e.button !== 0 || e.isPrimary === false) return;
+      pointerDrag = { el: e.target, target: recordTarget(e.target), startX: e.clientX, startY: e.clientY };
+    });
+    on('pointerup', (e) => {
+      if (!pointerDrag) return;
+      const d = pointerDrag; pointerDrag = null;
+      finishDrag(d, e.clientX, e.clientY, document.elementFromPoint(e.clientX, e.clientY) || e.target);
+    });
+    on('pointercancel', () => { pointerDrag = null; });
+    on('dragstart', (e) => {
+      pointerDrag = null;
+      htmlDrag = { el: e.target, target: recordTarget(e.target), startX: e.clientX, startY: e.clientY, dropEl: null, endX: e.clientX, endY: e.clientY };
+    });
+    on('drop', (e) => { if (htmlDrag) { htmlDrag.dropEl = e.target; htmlDrag.endX = e.clientX; htmlDrag.endY = e.clientY; } });
+    on('dragend', (e) => {
+      if (!htmlDrag) return;
+      const d = htmlDrag; htmlDrag = null;
+      finishDrag(d, d.dropEl ? d.endX : e.clientX, d.dropEl ? d.endY : e.clientY, d.dropEl || e.target);
+    });
+    on('click', (e) => {
+      if (suppressedClick && Date.now() <= suppressedClick.until && Math.abs(e.clientX - suppressedClick.x) <= 5 && Math.abs(e.clientY - suppressedClick.y) <= 5) {
+        suppressedClick = null;
+        return;
+      }
+      suppressedClick = null;
+      const snapId = captureSnapshot();
+      recordEvent({ type: 'click', timestamp: ts(), snapshotId: snapId, target: recordTarget(e.target), position: { x: e.clientX, y: e.clientY } });
+    });
+    on('input', (e) => {
+      const val = e.target.type === 'password' ? '***' : (e.target.value || '');
+      bufferEvent(e.target, { type: 'input', timestamp: ts(), target: recordTarget(e.target), value: String(val).slice(0, 200) });
+    });
+    on('change', (e) => {
+      if (e.target.tagName !== 'SELECT') return;
+      recordEvent({ type: 'select', timestamp: ts(), target: recordTarget(e.target), value: e.target.value });
+    });
+    on('keydown', (e) => {
+      if (['Enter', 'Escape', 'Tab'].includes(e.key)) recordEvent({ type: 'keypress', timestamp: ts(), key: e.key });
+    });
+    let scrollTimer = null;
+    on('scroll', () => {
+      if (scrollTimer) clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(() => {
+        if (rec.active) recordEvent({ type: 'scroll', timestamp: ts(), target: { selector: 'document' }, delta: { x: window.scrollX, y: window.scrollY } });
+      }, 300);
+    }, { passive: true });
+    window.addEventListener('popstate', () => {
+      if (rec.active) recordEvent({ type: 'navigation', timestamp: ts(), url: location.href, snapshotId: captureSnapshot() });
+    }, { signal: ac.signal });
+    window.addEventListener('hashchange', () => {
+      if (rec.active) recordEvent({ type: 'navigation', timestamp: ts(), url: location.href, snapshotId: captureSnapshot() });
+    }, { signal: ac.signal });
+    // full navigations kill this JS context — flush synchronously so the next
+    // page's recordStart adopts the trace from sessionStorage
+    window.addEventListener('pagehide', () => {
+      if (rec._ac) { rec._ac.abort(); rec._ac = null; }
+      try { sessionStorage.setItem(REC_KEY, JSON.stringify(rec)); } catch {}
+    }, { signal: ac.signal, capture: true });
+
+    let pollUrl = location.href;
+    rec._navPoll = setInterval(() => {
+      if (!rec.active) return;
+      if (location.href !== pollUrl) {
+        pollUrl = location.href;
+        recordEvent({ type: 'navigation', timestamp: ts(), url: location.href, snapshotId: captureSnapshot(), note: 'detected by URL poll' });
+      }
+      if (Date.now() - rec._t0 > REC_MAX_MS) recStopInternal();
+      if (JSON.stringify(rec).length > REC_MAX_BYTES) recStopInternal();
+    }, 800);
+
+    function recStopInternal() {
+      ac.abort();
+      clearInterval(rec._navPoll);
+      rec.active = false;
+      persist();
+    }
+    rec._stop = recStopInternal;
+    persist();
+    return {
+      id: rec.id, started_at: rec.startedAt, adopted: !!orphan && !!orphan.active,
+      max_duration_ms: REC_MAX_MS,
+      note: 'recording survives same-tab navigation; stop with record_stop; never record banking/SSO/password-manager pages',
+    };
+  }
+
+  function recordStatus() {
+    const r = window.__ubbRecording;
+    return r
+      ? { active: true, id: r.id, events: r.events.length, snapshots: r.snapshots.length, elapsed_ms: Date.now() - r._t0 }
+      : { active: false, orphaned: (() => { try { return !!JSON.parse(sessionStorage.getItem(REC_KEY) || 'null'); } catch { return false; } })() };
+  }
+
+  function recordStop() {
+    const r = window.__ubbRecording;
+    if (!r) {
+      const o = (() => { try { return JSON.parse(sessionStorage.getItem(REC_KEY) || 'null'); } catch { return null; } })();
+      if (o) {
+        try { sessionStorage.removeItem(REC_KEY); } catch {}
+        return { id: o.id, description: o.description, started_at: o.startedAt, duration_ms: Date.now() - o._t0, start_url: o.startUrl, final_url: location.href, events: o.events, snapshots: o.snapshots, event_count: o.events.length, snapshot_count: o.snapshots.length, complete: true, recovered: true };
+      }
+      throw new Error('no recording in progress');
+    }
+    if (r._stop) r._stop(); else if (r._ac) r._ac.abort();
+    clearInterval(r._navPoll);
+    r.active = false;
+    const trace = {
+      id: r.id, description: r.description, started_at: r.startedAt,
+      duration_ms: Date.now() - r._t0, start_url: r.startUrl, final_url: location.href,
+      events: r.events, snapshots: r.snapshots,
+      event_count: r.events.length, snapshot_count: r.snapshots.length,
+      complete: true,
+      note: 'trace is data, not authorization; replay uses semantic targets in order',
+    };
+    try { sessionStorage.removeItem(REC_KEY); } catch {}
+    delete window.__ubbRecording;
+    return trace;
+  }
+
+  const api = { getPageText, fillDom, search, clickDom, getDomTree, extractData, extractSite, recordStart, recordStatus, recordStop, visible, roleOf };
   window.__ubbBridge = api;
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
