@@ -30,19 +30,21 @@ See [INSTALL.md](INSTALL.md). Summary:
 
 1. Load the unpacked extension from this folder (`chrome://extensions` → Developer mode → Load unpacked).
 2. Copy the pairing token from the extension popup.
-3. Start the daemon: `node daemon/ubb-bridge.mjs --port 8765 --token <token>`
-4. Verify: `node daemon/ubb.mjs status` → `"extension": true`
+3. Start the daemon: run `ubb status` (auto-starts it), or manually: `node daemon/ubb-bridge.mjs --port 8765 --token <token>`
+4. Verify: `ubb status` → `"extension": true`
 
 ## Quick start
 
 ```bash
-UBB="daemon/ubb.mjs"   # Node ≥ 18
-node "$UBB" list                          # tool catalog
-node "$UBB" tab.create '{"url":"example.com"}'
-node "$UBB" snapshot                      # accessibility tree with @eN refs
-node "$UBB" click '{"ref":"@e3"}'
-node "$UBB" screenshot --out shot.png
-node "$UBB" session.stop
+ubb list                                  # tool catalog
+ubb tab.create '{"url":"example.com"}'
+ubb snapshot                              # accessibility tree with @eN refs
+ubb click '{"ref":"@e3"}'
+ubb screenshot --out shot.png
+ubb session.stop
+
+# No Rust CLI on PATH? The Node CLI takes the same commands (Node >= 18):
+#   node daemon/ubb.mjs <command>
 ```
 
 Any agent that can spawn a process can use it: pipe JSON-RPC lines to the daemon's stdin, or connect as a WebSocket agent (`ubb-agent.<token>` subprotocol).
@@ -70,7 +72,7 @@ Ref discipline: refs (`@eN`) come from `snapshot` and stay valid across snapshot
 | Shield mode | popup | border + block input |
 | Human mode | popup / `human.set` | off |
 
-Daemon CLI: `node daemon/ubb.mjs status|list|<tool> '<json>'` (auto-starts the daemon), `node daemon/ubb.mjs daemon start|stop`, `config token|port`.
+Daemon CLI: `ubb status|list|<tool> '<json>'` (auto-starts the daemon), `ubb daemon start|stop`, `ubb config token|port`. If the Rust CLI is not installed, the Node CLI takes the same commands: `node daemon/ubb.mjs ...` (Node ≥ 18).
 
 ## Error codes (common)
 

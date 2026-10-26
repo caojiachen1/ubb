@@ -5,10 +5,10 @@ Prerequisites: Chrome or Edge (v116+). Three runtimes are available and they coe
 | Runtime | Needs | When to use |
 |---|---|---|
 | **Rust CLI** (`bin/ubb.exe`) | nothing — single static binary | **default** — zero deps, instant start; ships in this repo, rebuild via `rust-cli/` |
-| Node CLI | Node.js ≥ 18 (zero npm deps) | development — the extension tooling lives in JS, edits land with a reload |
+| Node CLI | Node.js ≥ 18 (zero npm deps) | fallback — only when the Rust CLI is not available; the extension tooling lives in JS, edits land with a reload |
 | Web console (`console/index.html`) | any local static file server | browser-only control, zero processes |
 
-The launchers `bin/ubb` (sh) and `bin/ubb.cmd` (cmd) run the Rust binary directly. The Node CLI (`node daemon/ubb.mjs`) takes the exact same commands and is interchangeable — use it when hacking on the extension tools.
+The launchers `bin/ubb` (sh) and `bin/ubb.cmd` (cmd) run the Rust binary directly — prefer `ubb` (or `bin/ubb.exe`). The Node CLI (`node daemon/ubb.mjs`) takes the exact same commands; use it only when the Rust CLI is not found (e.g. hacking on the daemon before a rebuild).
 
 ## 1. Load the extension
 
@@ -31,20 +31,22 @@ Manual override still works: `ubb config token <token>` (or `ubb config token` w
 ## 3. Verify
 
 ```bash
-node daemon/ubb.mjs status       # or: bin/ubb.exe status / bin/ubb status
+ubb status       # auto-starts the daemon; expect "extension": true
+# no `ubb` on PATH? bin/ubb.exe status — or the Node CLI: node daemon/ubb.mjs status
 # expect: "daemon": true, "extension": true
 ```
 
-If `extension: false`, the popup token and the daemon token differ — fix with step 2. If the daemon is not running, this command auto-starts it (Node: `node daemon/ubb-bridge.mjs`; Rust: `ubb.exe serve`).
+If `extension: false`, the popup token and the daemon token differ — fix with step 2. If the daemon is not running, this command auto-starts it (Rust: `ubb.exe serve`; Node: `node daemon/ubb-bridge.mjs`).
 
 ## 4. First run
 
 ```bash
-node daemon/ubb.mjs session.start
-node daemon/ubb.mjs tab.create '{"url":"example.com"}'
-node daemon/ubb.mjs snapshot
-node daemon/ubb.mjs screenshot --out shot.png
-node daemon/ubb.mjs session.stop
+ubb session.start
+ubb tab.create '{"url":"example.com"}'
+ubb snapshot
+ubb screenshot --out shot.png
+ubb session.stop
+# Node fallback for every command above: node daemon/ubb.mjs <command>
 ```
 
 ## Web console (no daemon, no Node)
@@ -74,7 +76,8 @@ It speaks the same wire protocol (`ubb-auth.<token>` / `ubb-agent.<token>` subpr
 Check for an existing setup before installing anything:
 
 ```bash
-node daemon/ubb.mjs status        # extension:true → already installed, skip to use
+ubb status        # extension:true → already installed, skip to use
+# Node fallback: node daemon/ubb.mjs status
 ```
 
 If not installed, ask the user to do steps 1–2 (browser UI actions), then verify with `status`. Never load the extension or paste tokens on the user's behalf without asking.
@@ -84,8 +87,8 @@ Token and port resolve in this order: CLI flags → `UBB_TOKEN` / `UBB_PORT` env
 ## Daemon lifecycle
 
 ```bash
-node daemon/ubb.mjs daemon start|stop|status     # Node daemon
-bin/ubb.exe daemon start|stop|status             # Rust daemon
+ubb daemon start|stop|status                     # Rust daemon (default)
+node daemon/ubb.mjs daemon start|stop|status     # Node daemon (fallback)
 ```
 
 Any `ubb` tool call auto-starts the daemon if it is down. The extension reconnects automatically after browser restarts, extension reloads, or daemon restarts — including switches between the Node and Rust daemons.
