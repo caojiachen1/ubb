@@ -95,6 +95,42 @@
     select:focus { border-color: var(--accent); }
     select option { background: #26252c; color: var(--text); }
 
+    /* Fluent custom dropdown */
+    .dropdown { position: relative; flex: none; }
+    .dd-btn {
+      display: flex; align-items: center; gap: 8px;
+      border: 1px solid var(--stroke); border-radius: 6px;
+      padding: 5px 10px; font-size: 12.5px; color: var(--text);
+      background: rgba(0, 0, 0, .25); min-width: 170px;
+    }
+    .dd-btn:hover { border-color: rgba(255,255,255,.16); }
+    .dropdown.open .dd-btn { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .dd-btn .chev {
+      margin-left: auto; width: 7px; height: 7px; flex: none; opacity: .7;
+      border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+      transform: rotate(45deg) translateY(-2px); transition: transform .15s;
+    }
+    .dropdown.open .dd-btn .chev { transform: rotate(225deg) translateY(-1px); }
+    .dd-menu {
+      display: none; position: absolute; right: 0; top: calc(100% + 5px); z-index: 30;
+      min-width: 100%; width: max-content;
+      background: rgba(40, 39, 46, .97); border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px; padding: 4px;
+      box-shadow: 0 10px 32px rgba(0,0,0,.5);
+      transform-origin: top right; animation: dd-pop .12s ease;
+    }
+    @keyframes dd-pop { from { opacity: 0; transform: scale(.96) translateY(-3px); } }
+    .dropdown.open .dd-menu { display: block; }
+    .dd-opt {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: 5px; font-size: 12.5px;
+      color: var(--text); cursor: pointer; white-space: nowrap;
+    }
+    .dd-opt:hover { background: rgba(255,255,255,.09); }
+    .dd-opt .check { margin-left: auto; opacity: 0; color: var(--accent); font-weight: 600; }
+    .dd-opt.sel { color: var(--accent); }
+    .dd-opt.sel .check { opacity: 1; }
+
     button {
       all: unset; cursor: pointer; user-select: none;
       border: 1px solid var(--stroke); border-radius: 6px; padding: 5px 12px;
@@ -172,7 +208,18 @@
     </div>
     <div class="row">
       <label>受控页防护罩</label>
-      <select id="shieldMode">
+      <div class="dropdown" id="shieldDD">
+        <button type="button" class="dd-btn" id="shieldBtn">
+          <span id="shieldLabel">边框 + 拦截点击（默认）</span>
+          <span class="chev"></span>
+        </button>
+        <div class="dd-menu" id="shieldMenu">
+          <div class="dd-opt" data-value="block">边框 + 拦截点击（默认）<span class="check">✓</span></div>
+          <div class="dd-opt" data-value="border">仅高亮边框<span class="check">✓</span></div>
+          <div class="dd-opt" data-value="off">关闭<span class="check">✓</span></div>
+        </div>
+      </div>
+      <select id="shieldMode" hidden>
         <option value="block">边框 + 拦截点击（默认）</option>
         <option value="border">仅高亮边框</option>
         <option value="off">关闭</option>

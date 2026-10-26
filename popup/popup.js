@@ -25,7 +25,7 @@ async function refresh() {
   $('port').value = st.port;
   $('enabled').checked = !!st.enabled;
   $('humanMode').checked = !!st.human_mode;
-  $('shieldMode').value = st.shield_mode;
+  setShield(st.shield_mode, true);
   $('session').textContent = st.session
     ? `会话 ${st.session.id} · 自建 ${st.session.created} · 接管 ${st.session.claimed}`
     : '会话：无（agent 调 session.start / tab.create 时自动建立）';
@@ -49,6 +49,32 @@ async function saveNow() {
 $('enabled').addEventListener('change', saveNow);
 $('humanMode').addEventListener('change', saveNow);
 $('shieldMode').addEventListener('change', saveNow);
+
+// Fluent custom dropdown for the shield mode (native select stays hidden as
+// the value store — all existing read/write logic keeps working)
+const SHIELD_LABELS = { block: '边框 + 拦截点击（默认）', border: '仅高亮边框', off: '关闭' };
+function setShield(v, silent) {
+  $('shieldMode').value = v;
+  $('shieldLabel').textContent = SHIELD_LABELS[v] || v;
+  document.querySelectorAll('#shieldMenu .dd-opt').forEach((o) =>
+    o.classList.toggle('sel', o.dataset.value === v));
+  if (!silent) saveNow();
+}
+$('shieldBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('shieldDD').classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  if (!$('shieldDD').contains(e.target)) $('shieldDD').classList.remove('open');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') $('shieldDD').classList.remove('open');
+});
+document.querySelectorAll('#shieldMenu .dd-opt').forEach((o) =>
+  o.addEventListener('click', () => {
+    setShield(o.dataset.value);
+    $('shieldDD').classList.remove('open');
+  }));
 $('save').addEventListener('click', saveNow);
 
 $('reveal').addEventListener('click', () => {
