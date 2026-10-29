@@ -479,6 +479,7 @@ version = "1.0.0"
 dependencies = [
  "base64",
  "futures-util",
+ "getrandom",
  "serde",
  "serde_json",
  "sha1",

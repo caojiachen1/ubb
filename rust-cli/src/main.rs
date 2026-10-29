@@ -34,7 +34,7 @@ const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 type Tx = mpsc::UnboundedSender<Message>;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Sink {
     Stdio,
     Ws(u64),
@@ -44,6 +44,9 @@ struct ExtState {
     out: Tx,
     info: Value,
     last_frame: Instant,
+    /// connection generation: a late teardown of an old socket must not clear
+    /// the extension slot that a newer socket now owns
+    gen: u64,
 }
 
 struct Route {
@@ -57,6 +60,7 @@ struct AppState {
     routes: Mutex<HashMap<String, Route>>,
     seq: AtomicU64,
     agent_seq: AtomicU64,
+    ext_seq: AtomicU64,
     /// bumped on every frame received from the extension (liveness probing)
     ext_tick: AtomicU64,
 }
@@ -69,6 +73,7 @@ impl AppState {
             routes: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
             agent_seq: AtomicU64::new(0),
+            ext_seq: AtomicU64::new(0),
             ext_tick: AtomicU64::new(0),
         }
     }
@@ -157,8 +162,15 @@ fn close(code: u16, reason: &str) -> Message {
     }))
 }
 
-fn drop_ext(state: &AppState, reason: &str) {
+fn drop_ext(state: &AppState, reason: &str, only_gen: Option<u64>) {
     let mut ext = state.ext.lock().unwrap();
+    if let Some(cur) = ext.as_ref() {
+        if let Some(g) = only_gen {
+            if cur.gen != g {
+                return; // a late close of the OLD socket; the new one is live
+            }
+        }
+    }
     if let Some(e) = ext.take() {
         let _ = e.out.send(close(1000, reason));
         log("extension disconnected");
@@ -195,7 +207,9 @@ fn handle_agent_message(state: &Arc<AppState>, sink: &Sink, msg: &Value) {
         if let (Some(out), Some(want)) = (state.ext_out(), want) {
             let routes = state.routes.lock().unwrap();
             for (int_id, r) in routes.iter() {
-                if r.agent_id == want {
+                // identity, not just caller-chosen id: another agent using the
+                // same id must not cancel this agent's work
+                if r.agent_id == want && r.sink == *sink {
                     let _ = out.send(Message::Text(
                         json!({"method": "cancel", "params": {"id": int_id}}).to_string().into(),
                     ));
@@ -281,6 +295,27 @@ fn handle_extension_message(state: &Arc<AppState>, msg: &Value) {
             state.broadcast(&json!({"method": "event.extension.connected", "params": {"info": info}}));
         }
         _ => {
+            // Extension→daemon reverse RPC (secret vault) is a Node-daemon
+            // feature. This daemon has no vault: answer the extension directly
+            // instead of broadcasting a request that may carry a plaintext
+            // secret.set value to every agent.
+            let reverse_id = msg.get("id").and_then(|v| v.as_str()).filter(|s| s.starts_with('s'));
+            if msg.get("method").is_some() && reverse_id.is_some() {
+                if let Some(out) = state.ext_out() {
+                    let _ = out.send(Message::Text(
+                        json!({
+                            "id": msg.get("id"),
+                            "error": {
+                                "code": "RPC_UNSUPPORTED",
+                                "message": "this Rust daemon does not implement the secret vault — run the Node daemon (node daemon/ubb-bridge.mjs) for secret.* tools"
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ));
+                }
+                return;
+            }
             let has_id = msg.get("id").map(|v| !v.is_null()).unwrap_or(false);
             let is_reply = has_id && (msg.get("result").is_some() || msg.get("error").is_some());
             if is_reply {
@@ -447,6 +482,7 @@ async fn handle_connection(state: Arc<AppState>, token: String, mut stream: TcpS
 
     // ---- extension singleton: probe incumbent, replace if dead
     let my_agent_id: u64;
+    let mut ext_gen: u64 = 0;
     if role == "extension" {
         if state.ext.lock().unwrap().is_some() {
             if probe_ext(&state, 1500).await {
@@ -455,12 +491,14 @@ async fn handle_connection(state: Arc<AppState>, token: String, mut stream: TcpS
                 return;
             }
             log("incumbent extension connection is dead, replacing");
-            drop_ext(&state, "replaced");
+            drop_ext(&state, "replaced", None);
         }
+        ext_gen = state.ext_seq.fetch_add(1, Ordering::SeqCst) + 1;
         *state.ext.lock().unwrap() = Some(ExtState {
             out: tx.clone(),
             info: Value::Null,
             last_frame: Instant::now(),
+            gen: ext_gen,
         });
         log("extension connected");
         my_agent_id = 0;
@@ -480,18 +518,23 @@ async fn handle_connection(state: Arc<AppState>, token: String, mut stream: TcpS
                 continue;
             }
             Ok(Message::Pong(_)) => {
-                state.ext_tick.fetch_add(1, Ordering::SeqCst);
-                if let Some(e) = state.ext.lock().unwrap().as_mut() {
-                    e.last_frame = Instant::now();
+                // an agent's pong says nothing about extension liveness
+                if role == "extension" {
+                    state.ext_tick.fetch_add(1, Ordering::SeqCst);
+                    if let Some(e) = state.ext.lock().unwrap().as_mut() {
+                        e.last_frame = Instant::now();
+                    }
                 }
                 continue;
             }
             Ok(Message::Close(_)) | Err(_) => break,
             Ok(_) => continue,
         };
-        state.ext_tick.fetch_add(1, Ordering::SeqCst);
-        if let Some(e) = state.ext.lock().unwrap().as_mut() {
-            e.last_frame = Instant::now();
+        if role == "extension" {
+            state.ext_tick.fetch_add(1, Ordering::SeqCst);
+            if let Some(e) = state.ext.lock().unwrap().as_mut() {
+                e.last_frame = Instant::now();
+            }
         }
         if role == "extension" {
             handle_extension_message(&state, &msg);
@@ -502,7 +545,7 @@ async fn handle_connection(state: Arc<AppState>, token: String, mut stream: TcpS
 
     // ---- teardown
     if role == "extension" {
-        drop_ext(&state, "gone");
+        drop_ext(&state, "gone", Some(ext_gen));
     } else {
         state.ws_agents.lock().unwrap().retain(|(i, _)| *i != my_agent_id);
         state
@@ -557,7 +600,7 @@ async fn run_daemon(port: u16, token: String) {
                     }
                 } else {
                     log("extension idle watchdog: dropping dead connection");
-                    drop_ext(&state, "dead");
+                    drop_ext(&state, "dead", None);
                 }
             }
         });
@@ -654,10 +697,13 @@ async fn run_native_host(origin: &str) {
         let token = match cfg.get("token").and_then(|v| v.as_str()) {
             Some(t) if t.len() >= 32 => t.to_string(),
             _ => {
-                let mut t = String::new();
-                for _ in 0..4 {
-                    t.push_str(&format!("{:016x}", crypto_random_u64()));
-                }
+                let Some(t) = crypto_token() else {
+                    let reply = json!({"ok": false, "error": "OS CSPRNG unavailable — refusing to generate a predictable token"});
+                    let _ = out.write_all(&(reply.to_string().len() as u32).to_le_bytes());
+                    let _ = out.write_all(reply.to_string().as_bytes());
+                    let _ = out.flush();
+                    continue;
+                };
                 cfg.insert("token".into(), json!(t));
                 write_config(&cfg);
                 t
@@ -681,19 +727,16 @@ async fn run_native_host(origin: &str) {
     }
 }
 
-fn crypto_random_u64() -> u64 {
-    // xorshift seeded from time+pid — the token only ever travels over the
-    // channel-bound native pairing flow, never through a user's hands
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let mut x = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9E3779B97F4A7C15)
-        ^ (std::process::id() as u64).wrapping_mul(0x9E3779B97F4A7C15);
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    x
+/// 64 hex chars from the OS CSPRNG. None means the platform RNG failed — the
+/// caller must refuse pairing rather than fall back to a predictable token.
+fn crypto_token() -> Option<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).ok()?;
+    let mut t = String::with_capacity(64);
+    for b in bytes {
+        t.push_str(&format!("{b:02x}"));
+    }
+    Some(t)
 }
 
 /// Part of `ubb install`: register the native messaging host so the extension
@@ -720,19 +763,19 @@ fn register_native_host() -> Result<String, String> {
     )
     .map_err(|e| format!("write manifest: {e}"))?;
     let manifest_str = manifest_path.display().to_string();
-    for hive in ["Edge", "Google\\Chrome"] {
-        let key = format!(
-            r"HKCU\Software\Microsoft\{}\NativeMessagingHosts\{}",
-            hive, NATIVE_HOST_NAME
-        );
+    // Chrome's key has NO Microsoft component; sharing a format string with
+    // Edge silently registered Chrome under the wrong hive.
+    for key in [
+        format!(r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
+        format!(r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
+    ] {
         let st = std::process::Command::new("reg")
             .args(["add", &key, "/ve", "/d", &manifest_str, "/f"])
             .output()
             .map_err(|e| format!("reg add: {e}"))?;
         if !st.status.success() {
             return Err(format!(
-                "reg add {} failed: {}",
-                hive,
+                "reg add {key} failed: {}",
                 String::from_utf8_lossy(&st.stderr)
             ));
         }
@@ -1198,5 +1241,275 @@ async fn http_shutdown(port: u16, token: &str) -> Result<String, ()> {
     match tokio::time::timeout(Duration::from_millis(2000), fut).await {
         Ok(Some(body)) => Ok(body),
         _ => Err(()),
+    }
+}
+
+// ================================================================ tests =====
+//
+// Regressions for the connection-epoch guard introduced alongside
+// BUILD 2026.10.29-cancel-epoch (see ubb-scratch/RUST-CANCEL-EPOCH.md).
+// Semantics mirror the Node daemon, which compares socket identity directly
+// (daemon/ubb-bridge.mjs: `extension.ws === ws`) instead of a generation.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Install an extension slot exactly as `handle_connection` does
+    /// (fetch_add on ext_seq, then store Some(ExtState)) — the assignment
+    /// itself is inline in the async socket handler and cannot be invoked
+    /// without a TcpStream, so tests reuse the two production statements.
+    fn register_ext(state: &AppState, tx: Tx) -> u64 {
+        let gen = state.ext_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        *state.ext.lock().unwrap() = Some(ExtState {
+            out: tx,
+            info: Value::Null,
+            last_frame: Instant::now(),
+            gen,
+        });
+        gen
+    }
+
+    /// Spawn a stand-in for the live extension's read loop: every frame the
+    /// daemon sends to the socket is answered, which — as in handle_connection
+    /// — bumps ext_tick. This is what makes probe_ext() return true.
+    fn answer_pings(state: &Arc<AppState>, mut rx: mpsc::UnboundedReceiver<Message>) {
+        let s = state.clone();
+        tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                s.ext_tick.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+    }
+
+    // ------------------------------------------------ assertion 1 (the fix)
+    #[test]
+    fn late_teardown_of_old_gen_keeps_the_new_slots() {
+        let state = AppState::new();
+        let (tx_old, _rx_old) = mpsc::unbounded_channel::<Message>();
+        let gen1 = register_ext(&state, tx_old);
+        // watchdog drops the dead gen1, the replacement registers gen2
+        drop_ext(&state, "dead", None);
+        let (tx_live, mut rx_live) = mpsc::unbounded_channel::<Message>();
+        let gen2 = register_ext(&state, tx_live);
+        assert!(gen2 > gen1);
+        // an in-flight route owned by the live era; a false clear would also
+        // strand it with EXTENSION_DISCONNECTED
+        let (tx_agent, mut rx_agent) = mpsc::unbounded_channel::<Message>();
+        state.ws_agents.lock().unwrap().push((3, tx_agent));
+        state.routes.lock().unwrap().insert(
+            "x1".into(),
+            Route { sink: Sink::Ws(3), agent_id: json!(9) },
+        );
+
+        // the OLD socket's teardown finally arrives, late
+        drop_ext(&state, "gone", Some(gen1));
+
+        let ext = state.ext.lock().unwrap();
+        assert!(
+            ext.is_some(),
+            "late teardown of dead gen-{gen1} socket cleared the live gen-{gen2} slot"
+        );
+        assert_eq!(ext.as_ref().unwrap().gen, gen2);
+        drop(ext);
+        assert!(
+            state.ext_out().is_some(),
+            "daemon now reports the extension offline while gen-{gen2} is live"
+        );
+        assert!(
+            rx_live.try_recv().is_err(),
+            "old teardown leaked a Close onto the live socket"
+        );
+        assert!(
+            state.routes.lock().unwrap().contains_key("x1"),
+            "old teardown failed the live era's in-flight route"
+        );
+        assert!(rx_agent.try_recv().is_err(), "phantom EXTENSION_DISCONNECTED sent");
+    }
+
+    // ------------------------------------------------ assertion 2 (not "never clear")
+    #[test]
+    fn current_gen_teardown_really_clears_the_slot() {
+        let state = AppState::new();
+        let (tx_ext, mut rx_ext) = mpsc::unbounded_channel::<Message>();
+        let (tx_agent, mut rx_agent) = mpsc::unbounded_channel::<Message>();
+        state.ws_agents.lock().unwrap().push((3, tx_agent));
+        state.routes.lock().unwrap().insert(
+            "x1".into(),
+            Route { sink: Sink::Ws(3), agent_id: json!(9) },
+        );
+        let gen = register_ext(&state, tx_ext);
+
+        drop_ext(&state, "gone", Some(gen));
+
+        assert!(state.ext.lock().unwrap().is_none(), "real disconnect was swallowed — extension would stay fake-online");
+        assert!(state.ext_out().is_none());
+        match rx_ext.try_recv() {
+            Ok(Message::Close(Some(f))) => {
+                assert_eq!(u16::from(f.code), 1000);
+                assert_eq!(f.reason.as_ref(), "gone");
+            }
+            other => panic!("expected Close(1000, gone) on the leaving socket, got {other:?}"),
+        }
+        assert!(state.routes.lock().unwrap().is_empty(), "route must drain");
+        match rx_agent.try_recv() {
+            Ok(Message::Text(t)) => {
+                assert!(t.as_str().contains("EXTENSION_DISCONNECTED"), "{t}");
+                assert!(t.as_str().contains("\"id\":9"), "{t}");
+            }
+            other => panic!("agent must learn the extension went away, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forced_drop_none_is_unconditional_and_empty_slot_is_a_noop() {
+        // the "replaced" / watchdog paths pass only_gen=None: must clear
+        // whatever generation is installed (they act on an incumbent already
+        // proven dead or superseded).
+        let state = AppState::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+        let gen = register_ext(&state, tx);
+        drop_ext(&state, "replaced", None);
+        assert!(state.ext.lock().unwrap().is_none());
+        assert!(matches!(rx.try_recv(), Ok(Message::Close(_))));
+        let _ = gen;
+        // dropping an already-empty slot must not panic nor send anything
+        let (_tx2, mut rx2) = mpsc::unbounded_channel::<Message>();
+        drop_ext(&state, "gone", Some(99));
+        assert!(state.ext.lock().unwrap().is_none());
+        assert!(rx2.try_recv().is_err());
+        // and a mismatched gen against an empty slot is likewise harmless
+        drop_ext(&state, "gone", Some(1));
+        assert!(state.ext.lock().unwrap().is_none());
+    }
+
+    // ------------------------------------------------ assertion 3 (late auth)
+    // A late-completing auth of an OLD socket must not preempt/overwrite the
+    // slot of a live connection. The production guard is in handle_connection:
+    // incumbent present -> probe_ext(); probe answers -> reject (return before
+    // allocating any gen or touching the slot). Offline we drive the exact
+    // predicate probe_ext + assert the reject leaves the epoch untouched; the
+    // dead-incumbent branch (probe false -> replace -> old teardown is a
+    // no-op) is exercised end-to-end below.
+
+    #[tokio::test]
+    async fn live_incumbent_answers_the_probe_so_late_auth_is_refused() {
+        let state = Arc::new(AppState::new());
+        let (tx, rx) = mpsc::unbounded_channel::<Message>();
+        let gen = register_ext(&state, tx);
+        answer_pings(&state, rx); // incumbent is alive
+
+        // the late socket's registration path probes the incumbent
+        assert!(
+            probe_ext(&state, 1500).await,
+            "probe said the live incumbent was dead — late auth would have replaced it"
+        );
+        // probe==true is the branch that closes 1008 and returns WITHOUT
+        // allocating a generation or overwriting the slot; offline we can
+        // only assert the epoch/slot were not advanced by a successful probe
+        assert_eq!(state.ext_seq.load(Ordering::SeqCst), gen, "late auth grabbed a new epoch despite a live incumbent");
+        let ext = state.ext.lock().unwrap();
+        assert_eq!(ext.as_ref().unwrap().gen, gen, "slot was overwritten under a live incumbent");
+    }
+
+    #[tokio::test]
+    async fn dead_incumbent_is_replaced_and_its_late_teardown_is_neutralised() {
+        let state = Arc::new(AppState::new());
+        // gen1 incumbent that never answers (dead socket)
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<Message>();
+        let gen1 = register_ext(&state, tx1);
+        assert!(!probe_ext(&state, 120).await, "silent incumbent answered the probe");
+        // the probe really reached the incumbent
+        match rx1.try_recv() {
+            Ok(Message::Text(t)) => assert!(t.as_str().contains("ping"), "probe must ping the incumbent, got {t}"),
+            other => panic!("incumbent never received the probe: {other:?}"),
+        }
+        // probe==false -> production replaces: forced drop, then a new epoch
+        drop_ext(&state, "replaced", None);
+        let (tx2, rx2) = mpsc::unbounded_channel::<Message>();
+        let gen2 = register_ext(&state, tx2);
+        assert!(gen2 > gen1);
+        answer_pings(&state, rx2); // new socket is live
+
+        // the old socket's teardown finally arrives late — the whole point
+        drop_ext(&state, "gone", Some(gen1));
+        let ext = state.ext.lock().unwrap();
+        assert!(ext.is_some(), "late teardown of the dead gen-{gen1} socket cleared the live gen-{gen2} slot");
+        assert_eq!(ext.as_ref().unwrap().gen, gen2);
+        drop(ext);
+
+        // and the surviving slot is genuinely live, not a fake-online corpse
+        assert!(probe_ext(&state, 500).await, "live gen-{gen2} slot must answer probes");
+    }
+
+    // ------------------------------------------------ other hunks of the same diff
+    #[test]
+    fn cancel_requires_socket_identity_not_just_the_chosen_id() {
+        let state = Arc::new(AppState::new());
+        let (tx_ext, mut rx_ext) = mpsc::unbounded_channel::<Message>();
+        register_ext(&state, tx_ext);
+        let a1 = state.agent_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let a2 = state.agent_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let (tx2, _rx2) = mpsc::unbounded_channel::<Message>();
+        state.ws_agents.lock().unwrap().push((a2, tx2));
+        // agent a1 has an in-flight call labelled id 9 at the extension
+        state.routes.lock().unwrap().insert(
+            "x7".into(),
+            Route { sink: Sink::Ws(a1), agent_id: json!(9) },
+        );
+
+        // a different agent that happens to use the same id must NOT cancel it
+        handle_agent_message(&state, &Sink::Ws(a2), &json!({"method": "cancel", "params": {"id": 9}}));
+        assert!(rx_ext.try_recv().is_err(), "lookalike-id cancel reached the extension");
+        assert!(state.routes.lock().unwrap().contains_key("x7"), "lookalike cancel stole the route");
+
+        // the real owner still can
+        handle_agent_message(&state, &Sink::Ws(a1), &json!({"method": "cancel", "params": {"id": 9}}));
+        match rx_ext.try_recv() {
+            Ok(Message::Text(t)) => {
+                let v: Value = serde_json::from_str(t.as_str()).unwrap();
+                assert_eq!(v["method"], "cancel");
+                assert_eq!(v["params"]["id"], "x7");
+            }
+            other => panic!("owner's own cancel must reach the extension, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_reverse_rpc_is_rejected_locally_never_broadcast() {
+        let state = Arc::new(AppState::new());
+        let (tx_ext, mut rx_ext) = mpsc::unbounded_channel::<Message>();
+        register_ext(&state, tx_ext);
+        // a planted agent: a broadcast of the raw frame would leak the
+        // plaintext secret.set value to it
+        let (tx_agent, mut rx_agent) = mpsc::unbounded_channel::<Message>();
+        state.ws_agents.lock().unwrap().push((1, tx_agent));
+
+        handle_extension_message(
+            &state,
+            &json!({"id": "s9", "method": "secret.set", "params": {"value": "hunter2"}}),
+        );
+
+        match rx_ext.try_recv() {
+            Ok(Message::Text(t)) => {
+                let v: Value = serde_json::from_str(t.as_str()).unwrap();
+                assert_eq!(v["id"], "s9");
+                assert_eq!(v["error"]["code"], "RPC_UNSUPPORTED");
+            }
+            other => panic!("extension must get a direct error reply, got {other:?}"),
+        }
+        assert!(
+            rx_agent.try_recv().is_err(),
+            "reverse RPC (potentially plaintext) leaked to agents"
+        );
+    }
+
+    #[test]
+    fn csprng_token_shape_and_uniqueness() {
+        let a = crypto_token().expect("OS CSPRNG must work on the test host");
+        let b = crypto_token().expect("OS CSPRNG must work on the test host");
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "token must be 64 hex chars");
+        assert_ne!(a, b, "two CSPRNG draws collided");
     }
 }
