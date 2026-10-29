@@ -4,10 +4,16 @@
 //   ubb status                          daemon/extension health (auto-starts daemon)
 //   ubb list                            tool catalog
 //   ubb <tool.name> [json-args]         run a tool, print JSON result
-//   ubb <tool.name> [json] --out FILE   screenshot: write data_base64 to FILE
+//   ubb <tool.name> [json] --out FILE   write the base64 payload of any tool
+//                       (screenshot, print_pdf, …) to FILE; a directory works
+//                       too and takes the tool's filename_suggested
+//   ubb download cat <id>               print a finished TEXT download (the
+//                       extension has no fs, so this reads it on the Node side)
 //   ubb daemon start|stop|status
 //
 // Config resolution: --token/--port > UBB_TOKEN/UBB_PORT env > ~/.ubb/config.json
+// --port is ALWAYS the daemon port; a subcommand that opens its own listener has
+// a dedicated flag (ubb liveview --view-port, default 8790).
 // The daemon is spawned automatically (detached) if it is not running.
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -17,6 +23,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CLI_COMMANDS, cliHelpLines, runCliCommand } from './cli/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE = path.join(HERE, 'ubb-bridge.mjs');
@@ -114,7 +121,16 @@ if (cmd === 'install') {
   process.exit(0);
 }
 
-if (!TOKEN) {
+// The CLI registry dispatches BEFORE the token gate: on a fresh machine there
+// is no token yet, and `ubb secret add` is exactly what you run there — each
+// subcommand decides its own credential needs. Built-ins keep priority so
+// status/daemon/help/list are untouched, and every daemon/tool path below
+// stays behind the gate (token validation is NOT weakened for them).
+const BUILTIN_CMDS = new Set(['status', 'daemon', 'help', 'list']);
+let cliHandled = false;
+if (cmd && !BUILTIN_CMDS.has(cmd)) cliHandled = await runCliCommand(cmd, rest);
+
+if (!TOKEN && !cliHandled) {
   die(`no token. Copy it from the UBB extension popup, then either:\n  ubb config token <token>\nor set UBB_TOKEN, or pass --token.`);
 }
 
@@ -220,23 +236,46 @@ async function call(method, params) {
   return m;
 }
 
-function print(m) {
+// --out is payload-agnostic: any tool that answers with data_base64 lands on
+// disk. A tool that withholds the payload (too_big) is re-asked once with
+// include_base64 so the bytes never have to pass through the conversation.
+function outTarget(out, r) {
+  const asDir =
+    out.endsWith('/') || out.endsWith(path.sep) ||
+    (() => { try { return fs.statSync(out).isDirectory(); } catch { return false; } })();
+  if (!asDir) return out;
+  const name = r.filename_suggested || `ubb-${new Date().toISOString().replace(/[:.]/g, '-')}.${String(r.format || 'bin').toLowerCase()}`;
+  return path.join(out, name);
+}
+
+async function print(m, recall) {
   if (m.error) {
     console.error(JSON.stringify(m.error));
     process.exitCode = 2;
     return;
   }
   let r = m.result;
+  if (OUT && r?.too_big && r.data_base64 === undefined && recall) {
+    const again = await recall();
+    if (again.error) {
+      console.error(JSON.stringify(again.error));
+      process.exitCode = 2;
+      return;
+    }
+    r = again.result;
+  }
   if (OUT && r?.data_base64) {
-    fs.mkdirSync(path.dirname(path.resolve(OUT)), { recursive: true });
-    fs.writeFileSync(OUT, Buffer.from(r.data_base64, 'base64'));
+    const dest = outTarget(OUT, r);
+    fs.mkdirSync(path.dirname(path.resolve(dest)), { recursive: true });
+    fs.writeFileSync(dest, Buffer.from(r.data_base64, 'base64'));
     const { data_base64, ...meta } = r;
-    console.log(JSON.stringify({ ...meta, saved_to: path.resolve(OUT) }, null, 2));
+    console.log(JSON.stringify({ ...meta, saved_to: path.resolve(dest) }, null, 2));
     return;
   }
   if (r?.data_base64) {
     const { data_base64, ...meta } = r;
-    console.log(JSON.stringify({ ...meta, note: `screenshot ${Math.round(data_base64.length * 0.75 / 1024)}KB; use --out FILE to save` }, null, 2));
+    const kb = Math.round((r.bytes || data_base64.length * 0.75) / 1024);
+    console.log(JSON.stringify({ ...meta, note: `${r.format || 'binary'} ${kb}KB; use --out FILE to save` }, null, 2));
     return;
   }
   if (r?.text && typeof r.text === 'string' && r.text.length > 4000 && !process.env.UBB_RAW) {
@@ -288,12 +327,18 @@ if (cmd === 'status') {
   ubb click '{"ref":"@e3"}'
   ubb fill '{"ref":"@e7","value":"hi"}'
   ubb screenshot --out shot.png     viewport shot (full_page:true for full page)
+  ubb download cat 42               print download #42 if it is text (--max-bytes N, --allow-path DIR)
   ubb daemon start|stop|status
   ubb config token <tok> | port <n>
+${CLI_COMMANDS.length ? `\n  contributed subcommands:\n${cliHelpLines()}\n` : ''}
+  --port is the DAEMON port everywhere (8765 by default). Preview/other local
+  listeners get their own flag: ubb liveview --view-port 8790.
 
 Tools are called as: ubb <tool.name> '<json-args>'`);
 } else if (cmd === 'list') {
-  print(await call('tool.list'));
+  await print(await call('tool.list'));
+} else if (cliHandled) {
+  // contributed subcommand already ran above the token gate
 } else {
   let params = {};
   if (rest.length) {
@@ -303,5 +348,8 @@ Tools are called as: ubb <tool.name> '<json-args>'`);
       die(`params must be valid JSON, e.g. ubb click '{"ref":"@e3"}'`);
     }
   }
-  print(await call(`tool.${cmd}`, params));
+  await print(
+    await call(`tool.${cmd}`, params),
+    () => call(`tool.${cmd}`, { ...params, include_base64: true }),
+  );
 }

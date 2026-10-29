@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "note": "Default site rules shipped with the extension. Adding a site = adding a rule here (or a user rule via site.rules.add) — no code change, no extension reload. lib/tools-sites.js fetches this file in the service worker (a content script cannot fetch its own packaged resource without web_accessible_resources), merges chrome.storage.local user overrides over it (user first, same id wins) and bridge-ctl attaches that list to every extractSite call — so THIS FILE is what actually runs. content/bridge.js keeps DEFAULT_SITE_RULES as the fallback for when the SW cannot serve it; daemon/test-sites.mjs pins the two equal. The engine reads ONLY these fields; executable fields (eval/script/function/on*) are rejected by site.rules.validate.",
+  "rules": [
+    {
+      "id": "github",
+      "match": { "host_pattern": ["github.com"] },
+      "referer": "https://github.com",
+      "extract": [
+        { "op": "text", "select": "[itemprop=\"name\"] a, .AppHeader-context-item-label", "prefix": "# " },
+        { "op": "text", "select": ".f4.my-3, [class*=\"About\"] p, .repository-content .f4" },
+        { "op": "join_texts", "select": ".topic-tag, a[data-octo-click=\"topic_click\"]", "prefix": "Topics: ", "separator": ", ", "emit_on": "matched" },
+        { "op": "text", "select": "#readme article, .markdown-body", "lead_part": "\n---\n" },
+        { "op": "images", "select": "img", "within": "#readme article, .markdown-body", "src_attrs": ["src"], "exclude": "badge|shields\\.io|avatar" },
+        {
+          "op": "group",
+          "when": { "selector_found": ".js-issue-title, .gh-header-title" },
+          "then": [
+            { "op": "reset" },
+            { "op": "text", "select": ".js-issue-title, .gh-header-title", "prefix": "# " },
+            { "op": "text", "select": ".comment-body .markdown-body" },
+            { "op": "images", "select": "img", "within": ".comment-body .markdown-body", "src_attrs": ["src"], "exclude": "avatar" },
+            { "op": "repeat", "select": ".timeline-comment .comment-body", "max": 11, "then": [{ "op": "text", "item": true, "prefix": "---\n" }] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zhihu",
+      "match": { "host_pattern": ["zhihu.com"] },
+      "referer": "https://www.zhihu.com",
+      "extract": [
+        { "op": "text", "select": ".QuestionHeader-title, h1.QuestionPage-title", "prefix": "# " },
+        { "op": "text", "select": ".QuestionHeader-detail .RichText" },
+        {
+          "op": "repeat",
+          "select": ".RichContent-inner, .Post-RichText, .RichText.ztext",
+          "max": 6,
+          "min_chars": 50,
+          "then": [
+            { "op": "text", "from_closest": { "within": ".AnswerItem, .ContentItem", "select": ".AuthorInfo-name, .UserLink-link" }, "prefix": "## ", "suffix": " 的回答" },
+            { "op": "text", "item": true },
+            { "op": "images", "select": "img[data-original], img[data-actualsrc], figure img", "item": true, "src_attrs": ["data-original", "data-actualsrc", "src"], "exclude": "equation|avatar" }
+          ]
+        },
+        {
+          "op": "group",
+          "when": { "parts_below": 2 },
+          "then": [
+            { "op": "text", "select": ".Post-Title", "prefix": "# " },
+            { "op": "text", "select": ".Post-RichTextContainer, .RichText.ztext.Post-RichText" },
+            { "op": "images", "select": "img[data-original], img[data-actualsrc], figure img", "within": ".Post-RichTextContainer, .RichText.ztext.Post-RichText", "src_attrs": ["data-original", "data-actualsrc", "src"], "exclude": "equation|avatar" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "juejin",
+      "match": { "host_pattern": ["juejin.cn"] },
+      "referer": "https://juejin.cn",
+      "extract": [
+        { "op": "text", "select": ".article-title, h1", "prefix": "# " },
+        { "op": "text", "select": ".author-name, .username", "prefix": "Author: " },
+        { "op": "text", "select": ".article-content, .markdown-body" },
+        { "op": "images", "select": "img", "within": ".article-content, .markdown-body", "src_attrs": ["src", "data-src"], "exclude": "avatar|user-gold-cdn" },
+        { "op": "join_texts", "select": ".tag-list .tag, a[href*=\"/tag/\"]", "prefix": "Tags: ", "separator": ", ", "drop_empty": true, "emit_on": "values" }
+      ]
+    },
+    {
+      "id": "wechat",
+      "match": { "host_pattern": ["mp.weixin.qq.com"] },
+      "referer": "https://mp.weixin.qq.com",
+      "extract": [
+        { "op": "text", "select": "#activity-name, .rich_media_title", "prefix": "# " },
+        { "op": "text", "select": "#js_name, .rich_media_meta_nickname", "prefix": "Author: " },
+        { "op": "text", "select": "#js_content, .rich_media_content" },
+        { "op": "images", "select": "img[data-src]", "within": "#js_content, .rich_media_content", "src_attrs": ["data-src"] }
+      ]
+    },
+    {
+      "id": "xiaohongshu",
+      "match": { "host_pattern": ["xiaohongshu.com"] },
+      "referer": "https://www.xiaohongshu.com",
+      "extract": [
+        {
+          "op": "text",
+          "attempts": [
+            { "select": "#detail-title, .note-content .title, [class*=\"note-title\"], [class*=\"noteTitle\"]" },
+            { "select": "h1, [class*=\"title\"]" }
+          ],
+          "prefix": "# "
+        },
+        {
+          "op": "images",
+          "attempts": [
+            { "select": ".note-image-list img, [class*=\"slide\"] img[src*=\"xhscdn\"], [class*=\"swiper-slide\"] img, [class*=\"carousel\"] img[src], .media-container img" },
+            { "select": "img[src*=\"xhscdn\"], img[src*=\"xiaohongshu\"]" }
+          ],
+          "src_attrs": ["src", "data-src", "currentSrc"],
+          "skip_data_uri": true,
+          "dedup": true,
+          "min_width": 50,
+          "width_default": 999
+        },
+        {
+          "op": "text",
+          "attempts": [
+            { "select": "#detail-desc", "min_chars": 10 },
+            { "select": ".note-content .desc", "min_chars": 10 },
+            { "select": "[class*=\"note-text\"]", "min_chars": 10 },
+            { "select": "[class*=\"noteText\"]", "min_chars": 10 },
+            { "select": "[class*=\"content\"] [class*=\"desc\"]", "min_chars": 10 },
+            { "select": ".note-detail .content", "min_chars": 10 },
+            { "select": "[id*=\"detail\"] [class*=\"desc\"]", "min_chars": 10 },
+            { "select": "[class*=\"note\"] p, [class*=\"note\"] span, [class*=\"detail\"] p, [class*=\"detail\"] span", "pick": "longest", "min_chars": 20 }
+          ]
+        },
+        { "op": "join_texts", "select": "[class*=\"tag\"] a, a[href*=\"/search_result/\"], a[href*=\"/explore/\"] [class*=\"tag\"]", "prefix": "\nTags: ", "separator": " ", "dedup": true, "filter_prefix": "#", "emit_on": "values" },
+        { "op": "videos", "select": "video", "count_part": "\n[Video: {N} clip(s) captured]" }
+      ]
+    },
+    {
+      "id": "twitter",
+      "match": { "host_pattern": ["x.com", "twitter.com"] },
+      "join": "\n\n---\n\n",
+      "referer": "https://x.com",
+      "extract": [
+        {
+          "op": "group",
+          "when": { "selector_found": "article[data-testid=\"tweet\"]" },
+          "then": [
+            { "op": "text", "within": "article[data-testid=\"tweet\"]", "select": "[data-testid=\"User-Name\"]", "prefix": "@" },
+            { "op": "text", "within": "article[data-testid=\"tweet\"]", "select": "[data-testid=\"tweetText\"]" },
+            { "op": "images", "within": "article[data-testid=\"tweet\"]", "select": "[data-testid=\"tweetPhoto\"] img", "src_attrs": ["src"], "exclude": "emoji|profile_images" },
+            { "op": "videos", "within": "article[data-testid=\"tweet\"]", "select": "video" },
+            { "op": "text", "within": "article[data-testid=\"tweet\"]", "select": "time", "attr": "datetime", "prefix": "Time: " },
+            { "op": "join_texts", "within": "article[data-testid=\"tweet\"]", "select": "[data-testid$=\"count\"]", "prefix": "Engagement: ", "separator": " | ", "drop_empty": true, "emit_on": "matched" }
+          ]
+        },
+        {
+          "op": "repeat",
+          "select": "article[data-testid=\"tweet\"]",
+          "max": 20,
+          "when": { "parts_below": 1 },
+          "then": [
+            { "op": "text", "select": "[data-testid=\"tweetText\"]", "head": { "select": "[data-testid=\"User-Name\"]", "prefix": "@", "suffix": ": ", "split_on": "·", "split_index": 0 } },
+            { "op": "images", "item": true, "select": "[data-testid=\"tweetPhoto\"] img", "src_attrs": ["src"], "exclude": "emoji|profile_images" }
+          ]
+        }
+      ]
+    }
+  ]
+}

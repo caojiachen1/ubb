@@ -4,12 +4,15 @@
 import { AgentLink } from './lib/ws-client.js';
 import { Dispatcher } from './lib/protocol.js';
 import { registerTools } from './lib/tools.js';
+import { registerExtras } from './lib/tools-extra.js';
 import { cdp } from './lib/cdp.js';
 import { refs } from './lib/refs.js';
 import { dropCapture } from './lib/snapshot.js';
 import { sessions } from './lib/tabs.js';
 import { audit } from './lib/audit.js';
-import { pendingConfirms, shield } from './lib/shield-ctl.js';
+import { downloadLedger } from './lib/tools-downloads.js';
+import { pendingConfirms, shield, rearmFrame, dropPasses } from './lib/shield-ctl.js';
+import { clearBridgeWedge } from './lib/bridge-ctl.js';
 import { STORAGE_KEYS, DEFAULTS, err, randomHex } from './lib/config.js';
 
 async function loadConfig() {
@@ -24,14 +27,28 @@ async function loadConfig() {
 const link = new AgentLink(loadConfig);
 const dispatcher = new Dispatcher();
 registerTools(dispatcher);
+registerExtras(dispatcher);
+
+// audit.seq must be re-hydrated from chrome.storage.session BEFORE the daemon
+// link opens: a tool dispatched against the pre-hydrate zero would hand the
+// tailer a fresh-from-0 seq and the CLI would read it as a ring wraparound.
+// (hydrateSeq is idempotent — safe to await from every link.start entry point.)
+function startLinkHydrated() {
+  audit.hydrateSeq().catch(() => {}).then(() => link.start());
+}
 
 dispatcher.onFinish = (name, params, ok, ms, errorCode) => {
   audit.log({ action: name, ok, ms, error: errorCode, tab_id: params?.tab_id });
-  if (!ok && sessions.active()) sessions.setStatus('error').then(() => sessions.setStatus('running'));
+  // a refusal caused BY the pause must not repaint the group as "running"
+  if (!ok && sessions.active() && !sessions.isPaused()) sessions.setStatus('error').then(() => sessions.setStatus('running'));
 };
 
 // inbound from daemon → dispatch → reply
+// The restore barrier is part of request admission: a call that arrives while
+// chrome.storage.session is still being read must not race a half-restored
+// session that is replaced microseconds later.
 link.handler = async (msg) => {
+  await sessions.ready();
   const reply = await dispatcher.handle(msg);
   if (reply) link.send(reply);
 };
@@ -45,7 +62,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
 });
 
-chrome.runtime.onStartup.addListener(() => link.start());
+chrome.runtime.onStartup.addListener(startLinkHydrated);
 chrome.alarms.create('ubb-keepalive', { periodInMinutes: 0.5 });
 
 // ── native auto-pairing (channel-bound trust) ────────────
@@ -95,7 +112,7 @@ async function nativePairInner() {
 }
 nativePair();
 
-link.start();
+startLinkHydrated();
 sessions.restore(); // survive SW restarts
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -136,21 +153,63 @@ chrome.debugger.onDetach.addListener(async (source) => {
 // script is not loaded yet) — onCompleted is the reliable point.
 chrome.webNavigation.onCompleted.addListener(async ({ tabId, frameId }) => {
   if (frameId !== 0) return;
+  clearBridgeWedge(tabId, 0); // fresh document → the bridge gets a fresh chance
   const s = sessions.active();
-  if (s && sessions.owns(tabId)) {
+  if (s && sessions.owns(tabId) && s.paused !== true) {
     await shield.set(tabId, { mode: 'armed', label: 'UBB agent control' });
   }
 });
 
+// Late-loaded iframe closure (log-D §5): an SPA-inserted subframe commits
+// without any top-frame navigation, so the arm broadcast above never reaches
+// its frameblock listener — the shield stays lit while the user could type
+// into the new frame. Address exactly that frameId with the QUERIED mode
+// (rearmFrame never invents an arm: a paused tab stays paused).
+chrome.webNavigation.onCommitted.addListener(({ tabId, frameId }) => {
+  if (frameId === 0) return; // main-frame arming stays on the onCompleted path
+  // a committed document is a fresh content script: lift any bridge cooldown
+  clearBridgeWedge(tabId, frameId);
+  const s = sessions.active();
+  if (!s || !sessions.owns(tabId)) return;
+  // fix5 §F3-⑥: this used to end in `.catch(() => {})`, which threw away the one
+  // thing rearmFrame exists to produce — whether that frame is actually armed.
+  // The outcome (sent / reason / mode / error) goes to the audit ring, so
+  // `ubb audit tail` shows an un-armed frame instead of a silent nothing-happened.
+  Promise.resolve()
+    .then(() => rearmFrame(tabId, frameId))
+    .then((r) => audit.log({ action: 'shield.rearm_frame', tab_id: tabId, frame_id: frameId, sent: !!(r && r.sent), reason: r && r.sent ? 'armed' : String((r && r.reason) || 'no_result'), mode: (r && r.mode) || null, error: (r && r.error) || undefined }))
+    .catch((e) => audit.log({ action: 'shield.rearm_frame', tab_id: tabId, frame_id: frameId, sent: false, reason: 'rearm_threw', error: String(e?.message || e).slice(0, 160) }));
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
-  cdp.sessions.delete(tabId);
+  cdp.forget(tabId);
   refs.invalidate(tabId);
+  clearBridgeWedge(tabId);
+  // a tab that no longer exists cannot be told to re-block: forget its open pass
+  // transactions instead of leaving timers that will address a dead tab
+  dropPasses(tabId);
   const s = sessions.active();
   if (s) {
     s.created.delete(tabId);
     s.claimed.delete(tabId);
     if (s.lastTabId === tabId) s.lastTabId = [...s.created][s.created.size - 1] ?? [...s.claimed][0] ?? null;
   }
+});
+
+// ---------------------------------------------------------------- download watch
+// The agent's own `download` tool only sees explicit url/href downloads. Chrome's
+// downloads API also fires for blob:/server-generated ones the agent never asked
+// for, so keep a ring the download.* tools can read and push lifecycle events.
+// The callback argument is a DownloadItem, and that type HAS NO tabId (only
+// DownloadDelta does, and this build never filled it either — LIVE-RESULTS-3B §3b),
+// so nothing here may expect a tab from the browser: attribution comes from the
+// download tool's claim, from a delta that really carries one, or from the
+// heuristic. Which signals this browser actually supplies is counted in the ledger
+// and shown by download.list as `browser_signals`, not guessed in a description.
+downloadLedger.setEmitter((event, params) => link.emit(event, params));
+chrome.downloads.onCreated.addListener((item) => downloadLedger.created(item));
+chrome.downloads.onChanged.addListener((delta) => {
+  downloadLedger.changed(delta).catch(() => {});
 });
 
 // ---------------------------------------------------------------- extension messages
@@ -175,6 +234,7 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
     const method = msg.method || (msg.tool ? 'tool.' + msg.tool : null);
     if (!method) return { ok: false, error: 'method/tool required' };
     audit.log({ action: 'web.rpc', origin, tool: method.replace(/^tool\./, '') });
+    await sessions.ready();
     const reply = await dispatcher.handle({ id: 'web-' + Date.now() + '-' + randomHex(4), method, params: msg.params || {} });
     if (reply && reply.error) return { ok: false, error: reply.error.message || String(reply.error) };
     return { ok: true, result: reply && reply.result };
@@ -189,6 +249,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'UBB_INTERRUPT': {
         const n = dispatcher.cancelAll();
         const tabId = sender.tab?.id;
+        // user revoked control: the session stays paused (targetTab refuses)
+        // until a human re-arms; a navigation completing must not resume it
+        await sessions.pause();
         if (tabId != null) {
           // user took over: pause blocking on that tab until the next arm
           // (shield is statically imported at the top of this file; dynamic
@@ -197,6 +260,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         link.emit('session.interrupted', { tab_id: tabId, cancelled: n });
         sendResponse({ ok: true, cancelled: n });
+        break;
+      }
+      case 'UBB_RESUME': {
+        const tabId = sender.tab?.id;
+        const resumed = await sessions.resume();
+        if (tabId != null) await shield.set(tabId, { mode: 'armed', label: 'UBB agent control' });
+        link.emit('session.resumed', { tab_id: tabId });
+        sendResponse({ ok: true, resumed });
         break;
       }
       case 'UBB_CONFIRM_RESULT': {
@@ -241,6 +312,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // --- from popup ---
       case 'UBB_POPUP_STATE': {
         const cfg = await loadConfig();
+        await sessions.ready();
         sendResponse({
           connected: link.status === 'connected',
           status: link.status,

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UBB Live View</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif; background: #101014; color: #e8e8ee; }
+  header { padding: 10px 16px; border-bottom: 1px solid #2a2a34; display: flex; gap: 12px; align-items: baseline; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .hint { color: #9a9aa8; font-size: 12px; }
+  .wrap { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; padding: 16px; align-items: start; }
+  .frame { background: #000; border: 1px solid #2a2a34; border-radius: 10px; overflow: hidden; }
+  .frame img { display: block; width: 100%; height: auto; }
+  .frame .empty { padding: 48px 16px; text-align: center; color: #8b8b99; }
+  #meta { margin: 8px 2px 0; color: #9a9aa8; font-size: 12px; }
+  .panel { background: #16161c; border: 1px solid #2a2a34; border-radius: 10px; padding: 12px; }
+  .panel h2 { font-size: 13px; margin: 0 0 8px; color: #c9c9d6; font-weight: 600; }
+  ul#events { list-style: none; margin: 0; padding: 0; max-height: 70vh; overflow: auto; }
+  ul#events li { padding: 5px 0; border-bottom: 1px solid #22222c; font-size: 12px; display: flex; gap: 8px; }
+  ul#events b { color: #d6d6e2; font-weight: 600; flex: 0 0 auto; }
+  ul#events time { color: #7f7f8f; flex: 0 0 auto; }
+  ul#events span { color: #a8a8b8; word-break: break-all; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>UBB Live View</h1>
+  <span class="hint">左：代理正在看的画面（每 500ms 刷新）· 右：agent 事件流 · Ctrl+C 结束</span>
+</header>
+<main class="wrap">
+  <section>
+    <div class="frame">
+      <img id="frame" alt="浏览器最新帧" hidden>
+      <div id="empty" class="empty">等待第一帧…（若长期空白，确认 daemon 已连接扩展、并已 <code>ubb session.start</code> / <code>ubb tab.create</code>）</div>
+    </div>
+    <p id="meta"></p>
+  </section>
+  <section class="panel">
+    <h2>最近事件</h2>
+    <ul id="events"></ul>
+  </section>
+</main>
+<script src="liveview.js"></script>
+</body>
+</html>

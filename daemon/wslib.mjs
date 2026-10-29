@@ -12,6 +12,7 @@ export class WsSocket {
     this.buf = Buffer.alloc(0);
     this.fragments = null;
     this.fragOpcode = 0;
+    this.fragBytes = 0;
     this.closed = false;
     this.onmessage = null;
     this.onclose = null;
@@ -109,16 +110,31 @@ export class WsSocket {
   }
 
   _handleFrame({ fin, opcode, payload }) {
+    // RFC 6455 §5.5: control frames are never fragmented and carry <= 125 bytes
+    if (opcode >= 0x8 && (!fin || payload.length > 125)) {
+      this.close(1002, 'invalid control frame');
+      return;
+    }
     switch (opcode) {
       case 0x0: // continuation
-        if (this.fragments) {
-          this.fragments.push(payload);
-          if (fin) {
-            const full = Buffer.concat(this.fragments);
-            const op = this.fragOpcode;
-            this.fragments = null;
-            if (op === 0x1 && this.onmessage) this.onmessage(full.toString('utf8'));
-          }
+        if (!this.fragments) {
+          this.close(1002, 'unexpected continuation frame');
+          return;
+        }
+        this.fragBytes += payload.length;
+        if (this.fragBytes > MAX_MESSAGE) {
+          this.fragments = null;
+          this.fragBytes = 0;
+          this.close(1009, 'too big');
+          return;
+        }
+        this.fragments.push(payload);
+        if (fin) {
+          const full = Buffer.concat(this.fragments);
+          const op = this.fragOpcode;
+          this.fragments = null;
+          this.fragBytes = 0;
+          if (op === 0x1 && this.onmessage) this.onmessage(full.toString('utf8'));
         }
         break;
       case 0x1: // text
@@ -127,11 +143,16 @@ export class WsSocket {
           this.close(1003, 'binary not supported');
           return;
         }
+        if (this.fragments) {
+          this.close(1002, 'new data frame inside a fragmented message');
+          return;
+        }
         if (fin) {
           if (this.onmessage) this.onmessage(payload.toString('utf8'));
         } else {
           this.fragments = [payload];
           this.fragOpcode = opcode;
+          this.fragBytes = payload.length;
         }
         break;
       case 0x8: // close
